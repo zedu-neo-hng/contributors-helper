@@ -11,3 +11,7 @@ npm install && npm run dev
 
 Dockerfile build pack, port 3000. GitHub secrets: `COOLIFY_WEBHOOK_URL` (optional `COOLIFY_TOKEN`).
 The `Deploy (Coolify)` workflow runs only after `Malware Scan (CI Gate)` passes on `main`.
+
+## Live
+
+https://contributors.zedu.chat
