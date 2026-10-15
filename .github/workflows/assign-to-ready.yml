@@ -1,0 +1,16 @@
+name: Move to Ready on Assignment
+
+on:
+  issues:
+    types: [assigned]
+
+jobs:
+  move-to-ready:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Move Assigned Issue to Ready
+        uses: alex-page/github-project-automation-plus@v0.8.3
+        with:
+          project: "Team Neo Zedu Features"
+          column: "Ready"
+          repo-token: ${{ secrets.PROJECT_AUTOMATION_TOKEN }}
