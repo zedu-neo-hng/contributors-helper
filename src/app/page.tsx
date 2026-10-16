@@ -25,31 +25,37 @@ export default function ChatPage() {
 
   useEffect(() => {
     let id = "";
+
     try {
       id = localStorage.getItem("zoe-session-id") || "";
-    } catch {}
+    } catch {
+      // Local storage may be unavailable.
+    }
+
     if (!id) {
       id = crypto.randomUUID();
+
       try {
         localStorage.setItem("zoe-session-id", id);
-      } catch {}
+      } catch {
+        // Chat can still work without local storage.
+      }
     }
+
     setSessionId(id);
-    fetch(`/api/chat/history?sessionId=${encodeURIComponent(id)}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(data.messages);
-        }
-      })
-      .catch(() => {});
   }, []);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!input.trim() || loading) return;
 
-    const userMessage: Message = { role: "user", content: input };
+    const question = input.trim();
+    if (!question || loading) return;
+
+    const userMessage: Message = {
+      role: "user",
+      content: question,
+    };
+
     const updatedMessages = [...messages, userMessage];
 
     setMessages(updatedMessages);
@@ -59,26 +65,46 @@ export default function ChatPage() {
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: updatedMessages, sessionId }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: updatedMessages.map(({ role, content }) => ({
+            role,
+            content,
+          })),
+        }),
       });
+
       const data = await res.json();
 
-      if (data.error) {
-        setMessages([
-          ...updatedMessages,
-          { role: "assistant", content: `Error: ${data.error}` },
-        ]);
-      } else {
-        setMessages([
-          ...updatedMessages,
-          { role: "assistant", content: data.reply },
-        ]);
+      if (!res.ok) {
+        throw new Error(data.error || `Chat request failed (${res.status})`);
       }
-    } catch (err) {
+
+      if (typeof data.reply !== "string") {
+        throw new Error("The chat API returned an invalid response.");
+      }
+
       setMessages([
         ...updatedMessages,
-        { role: "assistant", content: "Failed to connect to the server." },
+        {
+          role: "assistant",
+          content: data.reply,
+        },
+      ]);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to connect to the server.";
+
+      setMessages([
+        ...updatedMessages,
+        {
+          role: "assistant",
+          content: `Error: ${message}`,
+        },
       ]);
     } finally {
       setLoading(false);
@@ -211,7 +237,7 @@ export default function ChatPage() {
 
                 <button
                   type="button"
-                  onClick={() => signOut()}
+                  onClick={handleSignOut}
                   style={{
                     backgroundColor: "#7c3aed",
                     color: "#fff",
@@ -227,7 +253,7 @@ export default function ChatPage() {
             ) : (
               <button
                 type="button"
-                onClick={() => signIn("google")}
+                onClick={handleSignIn}
                 style={{
                   backgroundColor: "#7c3aed",
                   color: "#fff",
@@ -241,9 +267,24 @@ export default function ChatPage() {
               </button>
             )}
           </div>
+
+          {authError && (
+            <p
+              role="alert"
+              style={{
+                color: "#f85149",
+                fontSize: "0.8rem",
+                margin: 0,
+                width: "100%",
+              }}
+            >
+              {authError}
+            </p>
+          )}
         </div>
 
         {/* Message Window */}
+
         <div
           style={{
             flex: 1,
@@ -284,7 +325,7 @@ export default function ChatPage() {
               <div className="markdown-content">
                 <ReactMarkdown
                   components={{
-                    a: ({  ...props }) => (
+                    a: ({ ...props }) => (
                       <a
                         {...props}
                         target="_blank"
@@ -296,22 +337,22 @@ export default function ChatPage() {
                         }}
                       />
                     ),
-                    ul: ({  ...props }) => (
+                    ul: ({ ...props }) => (
                       <ul
                         {...props}
                         style={{ paddingLeft: "20px", margin: "8px 0" }}
                       />
                     ),
-                    ol: ({  ...props }) => (
+                    ol: ({ ...props }) => (
                       <ol
                         {...props}
                         style={{ paddingLeft: "20px", margin: "8px 0" }}
                       />
                     ),
-                    li: ({  ...props }) => (
+                    li: ({ ...props }) => (
                       <li {...props} style={{ marginBottom: "4px" }} />
                     ),
-                    p: ({  ...props }) => (
+                    p: ({ ...props }) => (
                       <p {...props} style={{ margin: "6px 0" }} />
                     ),
                   }}
