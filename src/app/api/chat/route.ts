@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
 import { prisma } from '@/lib/prisma';
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 
 const groq = new Groq({ apiKey: process.env.AI_API_KEY });
 
@@ -254,62 +256,79 @@ ${zeduDocContent}
 `;
 export async function POST(req: Request) {
   try {
-    const { messages, sessionId } = await req.json();
+    // 1. Authenticate before parsing the request or calling Groq.
+    const session = await getServerSession(authOptions);
 
-    const validSessionId =
-      typeof sessionId === 'string' && sessionId.length >= 1 && sessionId.length <= 100
-        ? sessionId
-        : null;
-
-    let chatId: string | null = null;
-    if (validSessionId) {
-      try {
-        const user = await prisma.user.upsert({
-          where: { sessionId: validSessionId },
-          update: {},
-          create: { sessionId: validSessionId },
-        });
-        const existingChat = await prisma.chat.findFirst({
-          where: { userId: user.id },
-          orderBy: { createdAt: 'asc' },
-        });
-        const chat =
-          existingChat ?? (await prisma.chat.create({ data: { userId: user.id } }));
-        chatId = chat.id;
-        const lastMessage = Array.isArray(messages) ? messages[messages.length - 1] : null;
-        if (lastMessage && typeof lastMessage.content === 'string') {
-          await prisma.message.create({
-            data: { chatId, role: 'user', content: lastMessage.content },
-          });
-        }
-      } catch (dbError) {
-        console.error('Failed to save user message:', dbError);
-        chatId = null;
-      }
+    if (!session?.user) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
     }
 
+    // 2. Validate the existing chat request format.
+    let body: unknown;
+
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON request body" },
+        { status: 400 }
+      );
+    }
+
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      !("messages" in body) ||
+      !Array.isArray(body.messages)
+    ) {
+      return NextResponse.json(
+        { error: "Invalid request. Expected a messages array." },
+        { status: 400 }
+      );
+    }
+
+    const messages = body.messages;
+
+    const validMessages = messages.every(
+      (message: unknown) =>
+        typeof message === "object" &&
+        message !== null &&
+        "role" in message &&
+        "content" in message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string"
+    );
+
+    if (!validMessages) {
+      return NextResponse.json(
+        { error: "Invalid message format." },
+        { status: 400 }
+      );
+    }
+
+    // 3. Call Groq only after authentication and validation.
     const chatCompletion = await groq.chat.completions.create({
       model: "qwen/qwen3.8-27b",
       messages: [
         { role: "system", content: systemPrompt },
-        ...messages
+        ...messages,
       ],
     });
 
-    const reply = chatCompletion.choices[0]?.message?.content || "No response.";
-
-    if (chatId) {
-      try {
-        await prisma.message.create({
-          data: { chatId, role: 'assistant', content: reply },
-        });
-      } catch (dbError) {
-        console.error('Failed to save assistant reply:', dbError);
-      }
-    }
+    const reply =
+      chatCompletion.choices[0]?.message?.content || "No response.";
 
     return NextResponse.json({ reply });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    // Log details on the server; never return internal errors to clients.
+    console.error("Chat API request failed:", error);
+
+    return NextResponse.json(
+      { error: "Unable to process your chat request." },
+      { status: 500 }
+    );
   }
 }
