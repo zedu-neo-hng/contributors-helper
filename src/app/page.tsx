@@ -1,5 +1,5 @@
 'use client';
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 
 interface Message {
@@ -13,6 +13,29 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
+  const [sessionId, setSessionId] = useState<string>('');
+
+  useEffect(() => {
+    let id = '';
+    try {
+      id = localStorage.getItem('zoe-session-id') || '';
+    } catch {}
+    if (!id) {
+      id = crypto.randomUUID();
+      try {
+        localStorage.setItem('zoe-session-id', id);
+      } catch {}
+    }
+    setSessionId(id);
+    fetch(`/api/chat/history?sessionId=${encodeURIComponent(id)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data.messages) && data.messages.length > 0) {
+          setMessages(data.messages);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -29,7 +52,7 @@ export default function ChatPage() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: updatedMessages })
+        body: JSON.stringify({ messages: updatedMessages, sessionId })
       });
       const data = await res.json();
 
