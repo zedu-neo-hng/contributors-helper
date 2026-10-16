@@ -1,7 +1,10 @@
-"use client";
-import { useState, useEffect, FormEvent } from "react";
-import ReactMarkdown from "react-markdown";
+
+'use client';
+import { useState, useEffect, FormEvent } from 'react';
+import ReactMarkdown from 'react-markdown';
+import DocumentUpload from '@/components/DocumentUpload';
 import { signIn, signOut, useSession } from "next-auth/react";
+
 
 interface Message {
   role: "user" | "assistant";
@@ -150,6 +153,7 @@ export default function ChatPage() {
         color: "#f0f6fc",
         minHeight: "100vh",
         display: "flex",
+        flexDirection: "column",
         justifyContent: "center",
         alignItems: "center",
         padding: "20px",
@@ -169,7 +173,8 @@ export default function ChatPage() {
           boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
           overflow: "hidden",
         }}
-      >
+      >  
+
         {/* Header */}
         <div
           style={{
@@ -417,6 +422,7 @@ export default function ChatPage() {
           </button>
         </form>
       </div>
+      <DocumentUpload />
     </main>
   );
 }
