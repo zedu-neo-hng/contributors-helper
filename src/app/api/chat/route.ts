@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
+import { prisma } from '@/lib/prisma';
 
 const groq = new Groq({ apiKey: process.env.AI_API_KEY });
 
@@ -253,7 +254,39 @@ ${zeduDocContent}
 `;
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
+    const { messages, sessionId } = await req.json();
+
+    const validSessionId =
+      typeof sessionId === 'string' && sessionId.length >= 1 && sessionId.length <= 100
+        ? sessionId
+        : null;
+
+    let chatId: string | null = null;
+    if (validSessionId) {
+      try {
+        const user = await prisma.user.upsert({
+          where: { sessionId: validSessionId },
+          update: {},
+          create: { sessionId: validSessionId },
+        });
+        const existingChat = await prisma.chat.findFirst({
+          where: { userId: user.id },
+          orderBy: { createdAt: 'asc' },
+        });
+        const chat =
+          existingChat ?? (await prisma.chat.create({ data: { userId: user.id } }));
+        chatId = chat.id;
+        const lastMessage = Array.isArray(messages) ? messages[messages.length - 1] : null;
+        if (lastMessage && typeof lastMessage.content === 'string') {
+          await prisma.message.create({
+            data: { chatId, role: 'user', content: lastMessage.content },
+          });
+        }
+      } catch (dbError) {
+        console.error('Failed to save user message:', dbError);
+        chatId = null;
+      }
+    }
 
     const chatCompletion = await groq.chat.completions.create({
       model: "qwen/qwen3.8-27b",
@@ -264,6 +297,17 @@ export async function POST(req: Request) {
     });
 
     const reply = chatCompletion.choices[0]?.message?.content || "No response.";
+
+    if (chatId) {
+      try {
+        await prisma.message.create({
+          data: { chatId, role: 'assistant', content: reply },
+        });
+      } catch (dbError) {
+        console.error('Failed to save assistant reply:', dbError);
+      }
+    }
+
     return NextResponse.json({ reply });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
