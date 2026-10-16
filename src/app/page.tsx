@@ -1,6 +1,6 @@
 
 'use client';
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import DocumentUpload from '@/components/DocumentUpload';
 import { signIn, signOut, useSession } from "next-auth/react";
@@ -25,6 +25,12 @@ export default function ChatPage() {
   const [input, setInput] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [sessionId, setSessionId] = useState<string>("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Keep the newest message (or the loading indicator) in view.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, loading]);
 
   useEffect(() => {
     let id = "";
@@ -378,6 +384,7 @@ export default function ChatPage() {
               Zedu AI is reviewing tabs and formatting...
             </div>
           )}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Form */}
