@@ -1,15 +1,26 @@
-import { NextResponse } from 'next/server';
-import Groq from 'groq-sdk';
-import { prisma } from '@/lib/prisma';
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import Groq from "groq-sdk";
+import { authOptions } from "@/lib/auth";
 
-const groq = new Groq({ apiKey: process.env.AI_API_KEY });
+const groq = new Groq({
+  apiKey: process.env.AI_API_KEY,
+});
+
+async function getUnauthorizedResponse() {
+  const session = await getServerSession(authOptions);
+
+  return session?.user
+    ? null
+    : NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
 
 const zeduDocContent = `
 === ZEDU TASK DOCUMENTATION ===
-- 📝 Stage 1 Submission Form
+- ≡ƒô¥ Stage 1 Submission Form
 
 
-This is the submission form for the Stage 1 task below. Submit your work here 👉 https://forms.gle/XCeh6TcKjwnFtTCW6 
+This is the submission form for the Stage 1 task below. Submit your work here ≡ƒæë https://forms.gle/XCeh6TcKjwnFtTCW6 
 
 
 Tasks to complete before Wednesday:
@@ -20,10 +31,10 @@ Tasks to complete before Wednesday:
 5. (Advanced) Push your code to your private GitHub
 
 
-⏰ Deadline: Tuesday, 29th, 11:59pm WAT
+ΓÅ░ Deadline: Tuesday, 29th, 11:59pm WAT
 
 
-🎥 Lesson 1 call recording (this morning): https://drive.google.com/file/d/1bJQ-DSdi8cx5WkA9DBRCKnEsyM_7mx5z/view?usp=sharing  
+≡ƒÄÑ Lesson 1 call recording (this morning): https://drive.google.com/file/d/1bJQ-DSdi8cx5WkA9DBRCKnEsyM_7mx5z/view?usp=sharing  
 HNG15 | Lesson 2
 Deadline: Friday, 11:59 PM (WAT)
 
@@ -48,18 +59,18 @@ Set up the group version of Zedu.
 Deadline: Friday, 11:59 PM
 
 
-📌 HNG15 | Lesson 2 Submission
+≡ƒôî HNG15 | Lesson 2 Submission
 
 
-Submit your Stage Two work here 👇🏾
+Submit your Stage Two work here ≡ƒæç≡ƒÅ╛
 https://docs.google.com/forms/d/e/1FAIpQLSewMLKjMDSvoEIIlaPVi3HxVN9Y1ijz1MTBiBjpx5Y1k2GuEw/viewform
 
 
-⏰ Deadline: Friday, 11:59 PM (WAT). Late submissions won't be accepted.
+ΓÅ░ Deadline: Friday, 11:59 PM (WAT). Late submissions won't be accepted.
 
 
-• Task 1 (Individual): everyone submits their shop website.
-• Task 2 (Team): the dev who did the Zedu group setup submits for the team. 
+ΓÇó Task 1 (Individual): everyone submits their shop website.
+ΓÇó Task 2 (Team): the dev who did the Zedu group setup submits for the team. 
 Lesson 3 Task
 Deadline: Monday, 5 October 2026, at 11:59 PM (WAT).
 Individual Task: Build a Mobile App for Your Shop
@@ -73,8 +84,8 @@ ________________
 
 
 
-Team Task: Present Your Team’s Version of Zedu
-Present your team’s version of Zedu. Every team member must edit at least one piece of text and ensure their change is merged into the central staging branch and deployed to production.
+Team Task: Present Your TeamΓÇÖs Version of Zedu
+Present your teamΓÇÖs version of Zedu. Every team member must edit at least one piece of text and ensure their change is merged into the central staging branch and deployed to production.
 Stage 2 eligibility: Only team members whose text changes are live in production will qualify to advance to Stage 2 of HNG15.
 You have two things to submit. 
 First is a github PR link of your contribution in your team, and then the mobile application version of your eCommerce website from lesson 2.
@@ -98,7 +109,7 @@ In the video, demonstrate the following:
 Important
    * The video should clearly show the web application and mobile application during the demonstration.
    * The login must use the same user account on both platforms.
-   * The cart must synchronize in both directions: Web → Mobile and Mobile → Web.
+   * The cart must synchronize in both directions: Web ΓåÆ Mobile and Mobile ΓåÆ Web.
    * Please demonstrate the application running on a physical mobile device.
    * Keep the video focused on the required functionality. No long introductions or explanations are necessary.
    * Submit one continuous recording where possible; avoid editing together separate clips.
@@ -161,7 +172,7 @@ You can choose:
 Find something small and specific and redesign/improve it.
 
 The suggested workflow is:
-Screenshot existing UI → give it to Claude/another AI → generate an improved design → submit the design as a ticket → get approval → implement it.
+Screenshot existing UI ΓåÆ give it to Claude/another AI ΓåÆ generate an improved design ΓåÆ submit the design as a ticket ΓåÆ get approval ΓåÆ implement it.
 
 
 Task 3: Team task
@@ -200,7 +211,7 @@ ________________
 Task 5: Mobile or desktop contribution
 Everyone must make at least one contribution to either mobile or desktop.
 There have been too many web tickets and too few mobile/desktop tickets, so contributions now need to be distributed across platforms.
-The fix can be very small.✌️
+The fix can be very small.Γ£î∩╕Å
 
 
 
@@ -239,7 +250,6 @@ Addition to the process moving forward
 Slide link: https://docs.google.com/presentation/d/1kvzASBYU2ywPQlQxlsbPG75MXStg0nf8oclJMWRrTTM/edit?usp=drivesdk
 `;
 
-
 const systemPrompt = `
 You are  Zoe, the official Zedu Contributor Assistant. Your job is to help interns find tasks, guidelines, and resources from the official Zedu project document.
 
@@ -252,64 +262,102 @@ Strict Rules you MUST follow:
 === OFFICIAL ZEDU DOCUMENTATION ===
 ${zeduDocContent}
 `;
+
+export async function GET() {
+  try {
+    const unauthorizedResponse = await getUnauthorizedResponse();
+
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
+    return NextResponse.json(
+      { error: "Method not allowed" },
+      { status: 405, headers: { Allow: "POST" } },
+    );
+  } catch (error) {
+    console.error("Chat API authentication failed:", error);
+
+    return NextResponse.json(
+      { error: "Unable to authenticate chat request." },
+      { status: 500 },
+    );
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    const { messages, sessionId } = await req.json();
+    const unauthorizedResponse = await getUnauthorizedResponse();
 
-    const validSessionId =
-      typeof sessionId === 'string' && sessionId.length >= 1 && sessionId.length <= 100
-        ? sessionId
-        : null;
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
 
-    let chatId: string | null = null;
-    if (validSessionId) {
-      try {
-        const user = await prisma.user.upsert({
-          where: { sessionId: validSessionId },
-          update: {},
-          create: { sessionId: validSessionId },
-        });
-        const existingChat = await prisma.chat.findFirst({
-          where: { userId: user.id },
-          orderBy: { createdAt: 'asc' },
-        });
-        const chat =
-          existingChat ?? (await prisma.chat.create({ data: { userId: user.id } }));
-        chatId = chat.id;
-        const lastMessage = Array.isArray(messages) ? messages[messages.length - 1] : null;
-        if (lastMessage && typeof lastMessage.content === 'string') {
-          await prisma.message.create({
-            data: { chatId, role: 'user', content: lastMessage.content },
-          });
-        }
-      } catch (dbError) {
-        console.error('Failed to save user message:', dbError);
-        chatId = null;
-      }
+    if (!process.env.AI_API_KEY) {
+      return NextResponse.json(
+        { error: "AI service is not configured." },
+        { status: 503 },
+      );
+    }
+
+    let body: unknown;
+
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON request body." },
+        { status: 400 },
+      );
+    }
+
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      !("messages" in body) ||
+      !Array.isArray(body.messages)
+    ) {
+      return NextResponse.json(
+        { error: "Expected a messages array." },
+        { status: 400 },
+      );
+    }
+
+    const messages = body.messages;
+
+    const validMessages = messages.every(
+      (message: unknown) =>
+        typeof message === "object" &&
+        message !== null &&
+        "role" in message &&
+        "content" in message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string",
+    );
+
+    if (!validMessages || messages.length > 50) {
+      return NextResponse.json(
+        { error: "Invalid messages or too many messages." },
+        { status: 400 },
+      );
     }
 
     const chatCompletion = await groq.chat.completions.create({
       model: "qwen/qwen3.8-27b",
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages
-      ],
+      messages: [{ role: "system", content: systemPrompt }, ...messages],
     });
 
-    const reply = chatCompletion.choices[0]?.message?.content || "No response.";
+    const reply = chatCompletion.choices[0]?.message?.content;
 
-    if (chatId) {
-      try {
-        await prisma.message.create({
-          data: { chatId, role: 'assistant', content: reply },
-        });
-      } catch (dbError) {
-        console.error('Failed to save assistant reply:', dbError);
-      }
-    }
+    return NextResponse.json({
+      reply: reply || "No response.",
+    });
+  } catch (error) {
+    console.error("Chat API request failed:", error);
 
-    return NextResponse.json({ reply });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: "Unable to process your chat request." },
+      { status: 500 },
+    );
   }
 }
