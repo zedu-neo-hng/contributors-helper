@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
+import DocumentUpload from '@/components/DocumentUpload';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -69,7 +70,7 @@ export default function ChatPage() {
   };
 
   return (
-    <main style={{ backgroundColor: '#0d1117', color: '#f0f6fc', minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', fontFamily: 'sans-serif' }}>
+    <main style={{ backgroundColor: '#0d1117', color: '#f0f6fc', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '20px', fontFamily: 'sans-serif' }}>
       <div style={{ width: '100%', maxWidth: '750px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '12px', display: 'flex', flexDirection: 'column', height: '85vh', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
         
         {/* Header */}
@@ -124,6 +125,7 @@ export default function ChatPage() {
         </form>
 
       </div>
+      <DocumentUpload />
     </main>
   );
 }
