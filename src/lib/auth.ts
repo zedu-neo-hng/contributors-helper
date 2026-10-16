@@ -4,8 +4,8 @@ import GoogleProvider from "next-auth/providers/google";
 export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
     }),
   ],
 
@@ -13,21 +13,14 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
   },
 
-  secret: process.env.NEXTAUTH_SECRET,
-
   callbacks: {
     async jwt({ token, account, profile }) {
-      if (profile) {
-        token.name = profile.name ?? token.name;
-        token.email = profile.email ?? token.email;
-      }
-
-      if (account?.provider === "google" && profile) {
-        const googleProfile = profile as {
-          picture?: string;
-        };
-
-        token.picture = googleProfile.picture ?? token.picture;
+      if (account?.provider === "google") {
+        token.googleId =
+          account.providerAccountId ||
+          ("sub" in (profile ?? {})
+            ? String(profile?.sub ?? "")
+            : "");
       }
 
       return token;
@@ -35,12 +28,14 @@ export const authOptions: NextAuthOptions = {
 
     async session({ session, token }) {
       if (session.user) {
-        session.user.name = token.name ?? null;
-        session.user.email = token.email ?? null;
-        session.user.image = token.picture ?? null;
+        session.user.id = String(token.googleId ?? "");
       }
 
       return session;
     },
+  },
+
+  pages: {
+    signIn: "/",
   },
 };

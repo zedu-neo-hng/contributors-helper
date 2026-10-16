@@ -241,67 +241,6 @@ export default function ChatPage() {
               </button>
             )}
           </div>
-
-          {authError && (
-            <p
-              role="alert"
-              style={{
-                width: "100%",
-                margin: 0,
-                color: "#ff7b72",
-                fontSize: "0.8rem",
-              }}
-            >
-              {authError}
-            </p>
-          )}
-
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-            }}
-          >
-            {status === "loading" ? (
-              <span style={{ color: "#c9d1d9", fontSize: "0.8rem" }}>
-                Checking session...
-              </span>
-            ) : authenticated ? (
-              <>
-                {session.user?.image && (
-                  <img
-                    src={session.user.image}
-                    alt=""
-                    referrerPolicy="no-referrer"
-                    style={{
-                      width: "32px",
-                      height: "32px",
-                      borderRadius: "50%",
-                      objectFit: "cover",
-                    }}
-                  />
-                )}
-
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ color: "#fff", fontSize: "0.8rem" }}>
-                    {session.user?.name || "Google user"}
-                  </div>
-                  <div style={{ color: "#c9d1d9", fontSize: "0.7rem" }}>
-                    {session.user?.email}
-                  </div>
-                </div>
-
-                <button type="button" onClick={() => signOut()}>
-                  Sign out
-                </button>
-              </>
-            ) : (
-              <button type="button" onClick={() => signIn("google")}>
-                Sign in with Google
-              </button>
-            )}
-          </div>
         </div>
 
         {/* Message Window */}
@@ -340,6 +279,7 @@ export default function ChatPage() {
               >
                 {m.role === "user" ? "You" : "Zedu AI"}
               </strong>
+
               {/* Markdown rendering for structured text, lists, and clickable links */}
               <div className="markdown-content">
                 <ReactMarkdown

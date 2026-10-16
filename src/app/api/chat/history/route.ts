@@ -1,31 +1,45 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { NextResponse } from "next/server";
+import { getCurrentUser } from "@/lib/current-user";
+import { prisma } from "@/lib/prisma";
 
-export async function GET(req: Request) {
+export async function GET(request: Request) {
   try {
-    const sessionId = new URL(req.url).searchParams.get('sessionId');
+    const user = await getCurrentUser();
 
-    if (typeof sessionId !== 'string' || sessionId.length < 1 || sessionId.length > 100) {
-      return NextResponse.json({ messages: [] });
+    if (!user) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 },
+      );
     }
 
-    const user = await prisma.user.findUnique({ where: { sessionId } });
-    if (!user) return NextResponse.json({ messages: [] });
+    const { searchParams } = new URL(request.url);
+    const sessionId = searchParams.get("sessionId");
 
-    const chat = await prisma.chat.findFirst({
-      where: { userId: user.id },
-      orderBy: { createdAt: 'asc' },
+    const chats = await prisma.chat.findMany({
+      where: {
+        userId: user.id,
+        ...(sessionId ? { sessionId } : {}),
+      },
+      include: {
+        messages: {
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
-    if (!chat) return NextResponse.json({ messages: [] });
 
-    const messages = await prisma.message.findMany({
-      where: { chatId: chat.id },
-      orderBy: { createdAt: 'asc' },
-      select: { role: true, content: true },
-    });
-    return NextResponse.json({ messages });
+    return NextResponse.json({ chats });
   } catch (error) {
-    console.error('Failed to load chat history:', error);
-    return NextResponse.json({ messages: [] });
+    console.error("Failed to retrieve chat history:", error);
+
+    return NextResponse.json(
+      { error: "Unable to retrieve chat history" },
+      { status: 500 },
+    );
   }
 }
