@@ -3,8 +3,16 @@
 import { useState, useEffect, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import DocumentUpload from '@/components/DocumentUpload';
+import StarterPromptChips from '@/components/StarterPromptChips';
 import { signIn, signOut, useSession } from "next-auth/react";
 
+const STARTER_PROMPTS = [
+  "How do I set up the project locally?",
+  "Find good first issues for contributors",
+  "What are the PR & commit conventions?",
+  "Where are the Figma design guidelines?",
+  "What deliverables are open and how do I submit my work?",
+];
 
 interface Message {
   role: "user" | "assistant";
@@ -48,11 +56,13 @@ export default function ChatPage() {
     setSessionId(id);
   }, []);
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const isInitialState = !messages.some((m) => m.role === "user");
 
-    const question = input.trim();
+  const sendMessage = async (questionText: string) => {
+    const question = questionText.trim();
     if (!question || loading) return;
+
+    setInput(question);
 
     const userMessage: Message = {
       role: "user",
@@ -112,6 +122,15 @@ export default function ChatPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    sendMessage(input);
+  };
+
+  const handlePromptClick = (prompt: string) => {
+    sendMessage(prompt);
   };
 
   const handleSignIn = async () => {
@@ -367,6 +386,15 @@ export default function ChatPage() {
               </div>
             </div>
           ))}
+
+          {isInitialState && (
+            <StarterPromptChips
+              prompts={STARTER_PROMPTS}
+              onSelectPrompt={handlePromptClick}
+              disabled={loading}
+            />
+          )}
+
           {loading && (
             <div
               style={{
