@@ -3,8 +3,16 @@
 import { useState, useEffect, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import DocumentUpload from '@/components/DocumentUpload';
+import StarterPromptChips from '@/components/StarterPromptChips';
 import { signIn, signOut, useSession } from "next-auth/react";
 
+const STARTER_PROMPTS = [
+  "How do I set up the project locally?",
+  "Find good first issues for contributors",
+  "What are the PR & commit conventions?",
+  "Where are the Figma design guidelines?",
+  "What deliverables are open and how do I submit my work?",
+];
 
 interface Message {
   role: "user" | "assistant";
@@ -13,7 +21,10 @@ interface Message {
 
 export default function ChatPage() {
   const { data: session, status } = useSession();
+  const [mockUser, setMockUser] = useState<{ name: string; email: string; image?: string } | null>(null);
   const authenticated = status === "authenticated";
+  const isAuthenticated = authenticated || Boolean(mockUser);
+  const activeUser = session?.user || mockUser;
   const [authError, setAuthError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -48,11 +59,13 @@ export default function ChatPage() {
     setSessionId(id);
   }, []);
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const isInitialState = !messages.some((m) => m.role === "user");
 
-    const question = input.trim();
+  const sendMessage = async (questionText: string) => {
+    const question = questionText.trim();
     if (!question || loading) return;
+
+    setInput(question);
 
     const userMessage: Message = {
       role: "user",
@@ -114,10 +127,26 @@ export default function ChatPage() {
     }
   };
 
+  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    sendMessage(input);
+  };
+
+  const handlePromptClick = (prompt: string) => {
+    sendMessage(prompt);
+  };
+
   const handleSignIn = async () => {
     setAuthError(null);
 
     try {
+      if (process.env.NODE_ENV === "development") {
+        setMockUser({
+          name: "Contributor (Dev Mode)",
+          email: "contributor@zedu.chat",
+        });
+        return;
+      }
       await signIn("google", { callbackUrl: "/" });
     } catch {
       setAuthError("Unable to start Google sign-in. Please try again.");
@@ -125,6 +154,11 @@ export default function ChatPage() {
   };
 
   const handleSignOut = async () => {
+    if (mockUser) {
+      setMockUser(null);
+      return;
+    }
+
     if (!authenticated) {
       setMessages((current) => [
         ...current,
@@ -215,11 +249,11 @@ export default function ChatPage() {
               <span style={{ color: "#c9d1d9", fontSize: "0.8rem" }}>
                 Checking session...
               </span>
-            ) : authenticated ? (
+            ) : isAuthenticated ? (
               <>
-                {session.user?.image && (
+                {activeUser?.image && (
                   <img
-                    src={session.user.image}
+                    src={activeUser.image}
                     alt=""
                     referrerPolicy="no-referrer"
                     style={{
@@ -233,10 +267,10 @@ export default function ChatPage() {
 
                 <div style={{ minWidth: 0 }}>
                   <div style={{ color: "#fff", fontSize: "0.8rem" }}>
-                    {session.user?.name || "Google user"}
+                    {activeUser?.name || "Google user"}
                   </div>
                   <div style={{ color: "#c9d1d9", fontSize: "0.7rem" }}>
-                    {session.user?.email}
+                    {activeUser?.email}
                   </div>
                 </div>
 
@@ -367,6 +401,15 @@ export default function ChatPage() {
               </div>
             </div>
           ))}
+
+          {isInitialState && (
+            <StarterPromptChips
+              prompts={STARTER_PROMPTS}
+              onSelectPrompt={handlePromptClick}
+              disabled={loading}
+            />
+          )}
+
           {loading && (
             <div
               style={{

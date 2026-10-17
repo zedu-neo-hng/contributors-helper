@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start -p ${PORT:-3000}",
     "lint": "next lint",
+    "test": "npx tsx --test src/components/StarterPromptChips.test.tsx",
     "postinstall": "prisma generate"
   },
   "dependencies": {
