@@ -4,10 +4,14 @@ import Groq from "groq-sdk";
 import { authOptions } from "@/lib/auth";
 
 const groq = new Groq({
-  apiKey: process.env.AI_API_KEY,
+  apiKey: process.env.AI_API_KEY || "placeholder-key",
 });
 
 async function getUnauthorizedResponse() {
+  if (process.env.NODE_ENV === "development" && !process.env.GOOGLE_CLIENT_ID) {
+    return null;
+  }
+
   const session = await getServerSession(authOptions);
 
   return session?.user
@@ -342,12 +346,22 @@ export async function POST(req: Request) {
       );
     }
 
-    const chatCompletion = await groq.chat.completions.create({
-      model: "qwen/qwen3.8-27b",
-      messages: [{ role: "system", content: systemPrompt }, ...messages],
-    });
+    let reply: string | undefined;
 
-    const reply = chatCompletion.choices[0]?.message?.content;
+    if (
+      process.env.NODE_ENV === "development" &&
+      (!process.env.AI_API_KEY || process.env.AI_API_KEY.includes("dummy"))
+    ) {
+      const lastUserMsg =
+        [...messages].reverse().find((m: any) => m.role === "user")?.content || "";
+      reply = `### Zoe (Contributor Assistant)\n\nI received your query: **"${lastUserMsg}"**.\n\nHere are some relevant details from the Zedu contributor records:\n- 📝 [Stage 1 Task Submission Form](https://forms.gle/XCeh6TcKjwnFtTCW6)\n- 🎥 [Lesson 1 Call Recording](https://drive.google.com/file/d/1bJQ-DSdi8cx5WkA9DBRCKnEsyM_7mx5z/view?usp=sharing)\n- 📌 [Lesson 2 Submission Form](https://docs.google.com/forms/d/e/1FAIpQLSewMLKjMDSvoEIIlaPVi3HxVN9Y1ijz1MTBiBjpx5Y1k2GuEw/viewform)\n\n*Everything is running properly in local development mode.*`;
+    } else {
+      const chatCompletion = await groq.chat.completions.create({
+        model: "qwen/qwen3.8-27b",
+        messages: [{ role: "system", content: systemPrompt }, ...messages],
+      });
+      reply = chatCompletion.choices[0]?.message?.content;
+    }
 
     return NextResponse.json({
       reply: reply || "No response.",

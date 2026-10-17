@@ -21,7 +21,10 @@ interface Message {
 
 export default function ChatPage() {
   const { data: session, status } = useSession();
+  const [mockUser, setMockUser] = useState<{ name: string; email: string; image?: string } | null>(null);
   const authenticated = status === "authenticated";
+  const isAuthenticated = authenticated || Boolean(mockUser);
+  const activeUser = session?.user || mockUser;
   const [authError, setAuthError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -137,6 +140,13 @@ export default function ChatPage() {
     setAuthError(null);
 
     try {
+      if (process.env.NODE_ENV === "development") {
+        setMockUser({
+          name: "Contributor (Dev Mode)",
+          email: "contributor@zedu.chat",
+        });
+        return;
+      }
       await signIn("google", { callbackUrl: "/" });
     } catch {
       setAuthError("Unable to start Google sign-in. Please try again.");
@@ -144,6 +154,11 @@ export default function ChatPage() {
   };
 
   const handleSignOut = async () => {
+    if (mockUser) {
+      setMockUser(null);
+      return;
+    }
+
     if (!authenticated) {
       setMessages((current) => [
         ...current,
@@ -234,11 +249,11 @@ export default function ChatPage() {
               <span style={{ color: "#c9d1d9", fontSize: "0.8rem" }}>
                 Checking session...
               </span>
-            ) : authenticated ? (
+            ) : isAuthenticated ? (
               <>
-                {session.user?.image && (
+                {activeUser?.image && (
                   <img
-                    src={session.user.image}
+                    src={activeUser.image}
                     alt=""
                     referrerPolicy="no-referrer"
                     style={{
@@ -252,10 +267,10 @@ export default function ChatPage() {
 
                 <div style={{ minWidth: 0 }}>
                   <div style={{ color: "#fff", fontSize: "0.8rem" }}>
-                    {session.user?.name || "Google user"}
+                    {activeUser?.name || "Google user"}
                   </div>
                   <div style={{ color: "#c9d1d9", fontSize: "0.7rem" }}>
-                    {session.user?.email}
+                    {activeUser?.email}
                   </div>
                 </div>
 
