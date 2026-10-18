@@ -72,6 +72,51 @@ better always-on context, and the full text is only needed occasionally.
   and backgrounds is deliberately retained because contributors do ask "who is X?", but it is the
   noisiest section of the knowledge base and the most likely candidate for later trimming.
 
+## Title accuracy — checked against each recording's own content
+
+Each file title was checked against what the recording says about itself. **Almost every session names
+its own lesson, week or session number on the call:**
+
+| Session | What the recording says about itself | Title |
+| --- | --- | :-: |
+| 2026-09-28 | "in week one, **which is this week**, you're going to join a team… so that'll be week one" — a program overview in week 1 | ✅ |
+| 2026-09-30 | "we are basically **done with lesson one**. This is just an introductory lesson." | ✅ |
+| 2026-10-02 | "let's quickly jump to **the lesson three**. That's the one of today." (and "this is week one") | ✅ |
+| 2026-10-05 | "welcome everyone to **HNG week 2**… In **the fourth lesson** now, that's the **first lesson of week two**" | ✅ |
+| 2026-10-07 | "I'm going to go into what we are doing in **lesson five**" | ✅ |
+| 2026-10-12 | its own in-call header reads "HNG 15 — **WEEK 3, CLASS 3 / CHECK-IN CALL**" | ✅ |
+| 2026-10-16 | its own in-call header reads "HNG / ZEDU — **CALL 9** MEETING" | ✅ |
+| 2026-10-14 | no number spoken; the content says it is *closing* the previous week and setting "the coming week" — i.e. week 3 | ⚠️ |
+
+**2026-10-14** never names its own lesson number. It is filed as "Lesson 2 | Week 3", which is the
+**video's own YouTube title** carried in by tactiq, not something the speaker says; the recording
+matches it only on "Week 3". The title is therefore faithful to the video even though the number sits
+oddly against Lesson 5 a week earlier.
+
+**The one title that is contradicted by its own recording.**
+`2026-10-14_lesson_6_week_3_standup.md` is titled "Lesson 6 (Week 3): Standup & Sprint Sync", but
+*standup* and *sprint* appear **only in that title line** — nowhere in the recording — and the
+recording it contains is the same one as the 10-14 file above, whose own YouTube title is
+"Lesson 2 | Week 3".
+
+### Two consequences
+
+- **That file is a duplicate.** Its body is identical to
+  `2026-10-14_lesson_2_week_3_individual_checks_8_team_projects.md` — same YouTube recording
+  (`K00Ed98fch8`), 916 of 919 lines common. Only four metadata lines differ, and the two were ingested
+  from different source text files (`lesson 6.txt` vs `lesson 8.txt`), so one video entered the corpus
+  twice. This is why this directory holds **8** sessions while
+  [`../transcripts/README.md`](../transcripts/README.md) lists **9** — its rows 7 and 8 point at the
+  same video.
+- **A lesson is missing, and the recordings confirm it.** The calls themselves claim Lesson 1 (09-30),
+  Lesson 3 (10-02), Lesson 4 (10-05) and Lesson 5 (10-07), and 10-02 still describes itself as "week
+  one" — so a **Lesson 2 took place during week one and is absent from the collection**. That is a gap
+  in #7's "100% of transcripts collected" claim rather than a mislabelled file.
+
+The base names are kept exactly as-is, because they are the provenance link back to `transcripts/` and
+renaming them would break that 1:1 mapping. The summary files carry accurate descriptive titles of
+their own, independent of the questionable source titles.
+
 ## Consumption (next ticket)
 
 `summaries/*.summary.md` is intended to be concatenated into the chat system prompt in place of the
