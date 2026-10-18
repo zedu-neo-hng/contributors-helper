@@ -11,3 +11,19 @@ button:hover { background: #3f58d6; }
 .bubble.assistant { align-self: flex-start; background: #1a1e29; }
 .composer { display: flex; gap: 8px; }
 .composer input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #2a3040; background: #11141c; color: inherit; font-size: 1rem; }
+.message-feedback { margin-top: 10px; }
+.downvote-button, .feedback-cancel, .feedback-submit { padding: 6px 10px; border: 1px solid #3d4655; border-radius: 6px; background: transparent; color: #c9d1d9; font-size: 0.8rem; cursor: pointer; }
+.downvote-button:hover, .feedback-cancel:hover { background: #30363d; }
+.feedback-form { display: flex; flex-direction: column; gap: 8px; min-width: 240px; }
+.feedback-form label, .feedback-form-footer { color: #c9d1d9; font-size: 0.8rem; }
+.feedback-form textarea { width: 100%; resize: vertical; padding: 9px 10px; border: 1px solid #3d4655; border-radius: 6px; background: #0d1117; color: #f0f6fc; font: inherit; }
+.feedback-form textarea:focus { outline: 2px solid #7c3aed; outline-offset: 1px; }
+.feedback-form-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.feedback-form-footer > div { display: flex; gap: 6px; }
+.feedback-submit { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+.feedback-submit:hover { background: #6d28d9; }
+.feedback-notice { margin: 0; font-size: 0.8rem; }
+@media (max-width: 480px) {
+  .feedback-form { min-width: 0; width: min(100%, 320px); }
+  .feedback-form-footer { align-items: flex-start; flex-direction: column; }
+}
