@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { authOptions } from "@/lib/auth";
-
-const groq = new Groq({
-  apiKey: process.env.AI_API_KEY,
-});
 
 async function getUnauthorizedResponse() {
   const session = await getServerSession(authOptions);
@@ -300,6 +296,15 @@ export async function POST(req: Request) {
       );
     }
 
+    const openRouter = new OpenAI({
+      apiKey: process.env.AI_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": "https://contributors.zedu.chat",
+        "X-Title": "Zedu Contributors Helper",
+      },
+    });
+
     let body: unknown;
 
     try {
@@ -342,8 +347,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const chatCompletion = await groq.chat.completions.create({
-      model: "qwen/qwen3.8-27b",
+    const chatCompletion = await openRouter.chat.completions.create({
+      model: "deepseek/deepseek-v4-flash-0731:floor",
       messages: [{ role: "system", content: systemPrompt }, ...messages],
     });
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import path from "path";
-import Groq from "groq-sdk";
+import OpenAI from "openai";
 import { extractText, getDocumentProxy } from "unpdf";
 import { DATA_DIR, appendKnowledge, listStaged, markIngested } from "@/lib/storage";
 
@@ -33,7 +33,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "AI is not configured." }, { status: 503 });
     }
 
-    const groq = new Groq({ apiKey: process.env.AI_API_KEY });
+    const openRouter = new OpenAI({
+      apiKey: process.env.AI_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": "https://contributors.zedu.chat",
+        "X-Title": "Zedu Contributors Helper",
+      },
+    });
     const staged = (await listStaged()).sort((a, b) => a.uploadedAt.localeCompare(b.uploadedAt));
     const processed: string[] = [];
     const failed: { id: string; error: string }[] = [];
@@ -53,8 +60,8 @@ export async function POST(req: Request) {
         }
         if (!text.trim()) throw new Error("empty-text");
         stage = "ai";
-        const completion = await groq.chat.completions.create({
-          model: "qwen/qwen3.8-27b",
+        const completion = await openRouter.chat.completions.create({
+          model: "openai/gpt-oss-20b:floor",
           max_tokens: 800, // account OTPM limit is 1000; the model default (2048) gets 429'd
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
