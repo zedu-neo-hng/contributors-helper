@@ -56,7 +56,7 @@ export default function ChatPage() {
         </div>
 
         {/* Message Window */}
-        <div style={{ flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div role="log" aria-live="polite" style={{ flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {messages.map((m, idx) => (
             <div key={idx} style={{ 
               alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
@@ -85,13 +85,14 @@ export default function ChatPage() {
               </div>
             </div>
           ))}
-          {loading && <div style={{ color: '#8b949e', fontSize: '0.85rem', fontStyle: 'italic' }}>Zedu AI is reviewing tabs and formatting...</div>}
+          {loading && <div role="status" style={{ color: '#8b949e', fontSize: '0.85rem', fontStyle: 'italic' }}>Zedu AI is reviewing tabs and formatting...</div>}
         </div>
 
         {/* Input Form */}
         <form onSubmit={handleSubmit} style={{ padding: '16px', borderTop: '1px solid #30363d', display: 'flex', gap: '10px', background: '#161b22' }}>
           <input 
             type="text" 
+            aria-label="Message Zoe"
             value={input} 
             onChange={(e) => setInput(e.target.value)} 
             placeholder="Ask about tasks, submission links, or slide decks..." 
