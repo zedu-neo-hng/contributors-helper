@@ -27,6 +27,12 @@ export default function ChatPage() {
   const [input, setInput] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [sessionId, setSessionId] = useState<string>("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Keep the newest message (or the loading indicator) in view.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, loading]);
 
   const [copyFeedback, setCopyFeedback] = useState<{ index: number; state: 'pending' | 'success' | 'error' } | null>(null);
   const messageElements = useRef(new Map<number, HTMLDivElement>());
@@ -442,6 +448,7 @@ export default function ChatPage() {
               Zedu AI is reviewing tabs and formatting...
             </div>
           )}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Form */}
