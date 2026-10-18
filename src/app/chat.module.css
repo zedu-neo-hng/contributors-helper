@@ -1,0 +1,7 @@
+.message { min-width: 0; overflow-wrap: anywhere; }
+.message pre { max-width: 100%; overflow-x: auto; white-space: pre; }
+.message img { max-width: 100%; height: auto; }
+.copy { display: block; min-height: 44px; margin-top: 8px; padding: 8px 12px; border: 1px solid #8b949e; background: #161b22; font-size: .85rem; }
+.copy:focus-visible { outline: 3px solid #c4b5fd; outline-offset: 3px; }
+.status { margin: 4px 0 0; color: #f0f6fc; font-size: .85rem; }
+.composerInput { min-width: 0; }

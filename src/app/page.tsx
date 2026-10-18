@@ -1,7 +1,9 @@
 
 'use client';
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { messagePlainText } from '../lib/messagePlainText';
+import styles from './chat.module.css';
 import DocumentUpload from '@/components/DocumentUpload';
 import { signIn, signOut, useSession } from "next-auth/react";
 
@@ -26,6 +28,32 @@ export default function ChatPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [sessionId, setSessionId] = useState<string>("");
 
+  const [copyFeedback, setCopyFeedback] = useState<{ index: number; state: 'pending' | 'success' | 'error' } | null>(null);
+  const messageElements = useRef(new Map<number, HTMLDivElement>());
+  const copyRequest = useRef(0);
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => () => {
+    copyRequest.current++;
+    clearTimeout(copyTimer.current);
+  }, []);
+
+  const copyMessage = async (index: number) => {
+    const request = ++copyRequest.current;
+    clearTimeout(copyTimer.current);
+    setCopyFeedback({ index, state: 'pending' });
+    try {
+      const element = messageElements.current.get(index);
+      if (!element || !navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(messagePlainText(element));
+      if (request !== copyRequest.current) return;
+      setCopyFeedback({ index, state: 'success' });
+      copyTimer.current = setTimeout(() => setCopyFeedback(null), 2500);
+    } catch {
+      if (request === copyRequest.current) setCopyFeedback({ index, state: 'error' });
+    }
+  };
+
   useEffect(() => {
     let id = "";
 
@@ -47,6 +75,24 @@ export default function ChatPage() {
 
     setSessionId(id);
   }, []);
+
+
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+    fetch('/api/chat/history')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!cancelled && Array.isArray(data?.messages) && data.messages.length > 0) {
+          copyRequest.current++;
+          clearTimeout(copyTimer.current);
+          setCopyFeedback(null);
+          setMessages(data.messages);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [authenticated]);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -173,7 +219,7 @@ export default function ChatPage() {
           boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
           overflow: "hidden",
         }}
-      >  
+      >
 
         {/* Header */}
         <div
@@ -303,6 +349,7 @@ export default function ChatPage() {
           {messages.map((m, idx) => (
             <div
               key={idx}
+              className={styles.message}
               style={{
                 alignSelf: m.role === "user" ? "flex-end" : "flex-start",
                 backgroundColor: m.role === "user" ? "#7c3aed" : "#1f2937",
@@ -327,7 +374,10 @@ export default function ChatPage() {
               </strong>
 
               {/* Markdown rendering for structured text, lists, and clickable links */}
-              <div className="markdown-content">
+              <div className="markdown-content" ref={(element) => {
+                if (element) messageElements.current.set(idx, element);
+                else messageElements.current.delete(idx);
+              }}>
                 <ReactMarkdown
                   components={{
                     a: ({ ...props }) => (
@@ -365,6 +415,20 @@ export default function ChatPage() {
                   {m.content}
                 </ReactMarkdown>
               </div>
+              {m.role === 'assistant' && <>
+                <button type="button" className={styles.copy}
+                  aria-label={`Copy Zoe response ${idx + 1}`}
+                  aria-describedby={`copy-status-${idx}`}
+                  onClick={() => void copyMessage(idx)}>
+                  {copyFeedback?.index === idx && copyFeedback.state === 'success' ? 'Copied' : 'Copy'}
+                </button>
+                <div id={`copy-status-${idx}`} role="status" aria-live="polite" aria-atomic="true" className={styles.status}>
+                  {copyFeedback?.index === idx && (
+                    copyFeedback.state === 'success' ? 'Response copied to clipboard.' :
+                    copyFeedback.state === 'error' ? 'Could not copy. Try again, or select and copy the response manually.' : 'Copying response…'
+                  )}
+                </div>
+              </>}
             </div>
           ))}
           {loading && (
@@ -392,6 +456,7 @@ export default function ChatPage() {
           }}
         >
           <input
+            className={styles.composerInput}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
