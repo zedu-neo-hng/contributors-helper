@@ -1,10 +1,8 @@
-
-'use client';
+﻿'use client';
 import { useState, useEffect, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import DocumentUpload from '@/components/DocumentUpload';
 import { signIn, signOut, useSession } from "next-auth/react";
-
 
 interface Message {
   role: "user" | "assistant";
@@ -15,6 +13,8 @@ export default function ChatPage() {
   const { data: session, status } = useSession();
   const authenticated = status === "authenticated";
   const [authError, setAuthError] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [failedMessages, setFailedMessages] = useState<Message[] | null>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
@@ -48,22 +48,9 @@ export default function ChatPage() {
     setSessionId(id);
   }, []);
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-
-    const question = input.trim();
-    if (!question || loading) return;
-
-    const userMessage: Message = {
-      role: "user",
-      content: question,
-    };
-
-    const updatedMessages = [...messages, userMessage];
-
-    setMessages(updatedMessages);
-    setInput("");
+  const sendChatRequest = async (conversation: Message[]) => {
     setLoading(true);
+    setChatError(null);
 
     try {
       const res = await fetch("/api/chat", {
@@ -72,7 +59,7 @@ export default function ChatPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          messages: updatedMessages.map(({ role, content }) => ({
+          messages: conversation.map(({ role, content }) => ({
             role,
             content,
           })),
@@ -89,8 +76,9 @@ export default function ChatPage() {
         throw new Error("The chat API returned an invalid response.");
       }
 
+      setFailedMessages(null);
       setMessages([
-        ...updatedMessages,
+        ...conversation,
         {
           role: "assistant",
           content: data.reply,
@@ -102,16 +90,35 @@ export default function ChatPage() {
           ? error.message
           : "Failed to connect to the server.";
 
-      setMessages([
-        ...updatedMessages,
-        {
-          role: "assistant",
-          content: `Error: ${message}`,
-        },
-      ]);
+      setFailedMessages(conversation);
+      setChatError(message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    const question = input.trim();
+    if (!question || loading) return;
+
+    const userMessage: Message = {
+      role: "user",
+      content: question,
+    };
+
+    const updatedMessages = [...messages, userMessage];
+
+    setMessages(updatedMessages);
+    setInput("");
+
+    await sendChatRequest(updatedMessages);
+  };
+
+  const handleRetry = async () => {
+    if (!failedMessages || loading) return;
+    await sendChatRequest(failedMessages);
   };
 
   const handleSignIn = async () => {
@@ -173,8 +180,7 @@ export default function ChatPage() {
           boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
           overflow: "hidden",
         }}
-      >  
-
+      >
         {/* Header */}
         <div
           style={{
@@ -289,7 +295,6 @@ export default function ChatPage() {
         </div>
 
         {/* Message Window */}
-
         <div
           style={{
             flex: 1,
@@ -380,6 +385,47 @@ export default function ChatPage() {
           )}
         </div>
 
+        {/* Fallback Error Banner with Retry Button */}
+        {chatError && (
+          <div
+            role="alert"
+            style={{
+              margin: "0 16px 12px 16px",
+              padding: "10px 14px",
+              backgroundColor: "rgba(248, 81, 73, 0.12)",
+              border: "1px solid #f85149",
+              borderRadius: "8px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "12px",
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ color: "#ff7b72", fontSize: "0.85rem" }}>
+              Unable to complete response: {chatError}
+            </span>
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={loading}
+              style={{
+                backgroundColor: "#f85149",
+                color: "#fff",
+                border: "none",
+                padding: "6px 12px",
+                borderRadius: "6px",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                cursor: loading ? "not-allowed" : "pointer",
+                opacity: loading ? 0.6 : 1,
+              }}
+            >
+              {loading ? "Retrying..." : "Retry"}
+            </button>
+          </div>
+        )}
+
         {/* Input Form */}
         <form
           onSubmit={handleSubmit}
@@ -408,6 +454,7 @@ export default function ChatPage() {
           />
           <button
             type="submit"
+            disabled={loading}
             style={{
               backgroundColor: "#7c3aed",
               color: "#fff",
@@ -415,7 +462,8 @@ export default function ChatPage() {
               padding: "10px 18px",
               borderRadius: "6px",
               fontWeight: "bold",
-              cursor: "pointer",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.7 : 1,
             }}
           >
             Send
