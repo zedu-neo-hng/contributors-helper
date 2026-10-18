@@ -201,7 +201,7 @@ export default function ChatPage() {
               borderRadius: "20px",
             }}
           >
-            Groq Powered
+            OpenRouter Powered
           </span>
 
           <div
