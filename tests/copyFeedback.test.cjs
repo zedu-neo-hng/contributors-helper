@@ -8,15 +8,17 @@ const ts = require('typescript');
 
 function harness(clipboard) {
   const slots = [];
+  const states = [];
   let cursor = 0;
+  let stateCursor = 0;
   let mounted = false;
   const cleanups = [];
   const timers = new Map();
   const react = {
     useState(initial) {
-      const index = cursor++;
-      if (!(index in slots)) slots[index] = initial;
-      return [slots[index], value => { slots[index] = value; }];
+      const index = stateCursor++;
+      if (!(index in states)) states[index] = initial;
+      return [states[index], value => { states[index] = value; }];
     },
     useRef(initial) {
       const index = cursor++;
@@ -24,7 +26,10 @@ function harness(clipboard) {
     },
     useEffect(effect) {
       // Run only the copy cleanup effect; session network loading is out of scope.
-      if (!mounted && !cleanups.length) cleanups.push(effect());
+      if (!mounted && !cleanups.length) {
+        const cleanup = effect();
+        if (typeof cleanup === 'function') cleanups.push(cleanup);
+      }
     },
   };
   const jsx = (type, props) => ({ type, props });
@@ -47,6 +52,7 @@ function harness(clipboard) {
   let elements;
   function render() {
     cursor = 0;
+    stateCursor = 0;
     elements = [];
     function walk(value) {
       if (Array.isArray(value)) return value.forEach(walk);
@@ -63,8 +69,8 @@ function harness(clipboard) {
   }
   return {
     render, timers, unmount: () => cleanups.forEach(fn => fn()),
-    messages: value => { slots[1] = value; },
-    get feedback() { return slots[5]; },
+    messages: value => { states[1] = value; },
+    get feedback() { return states[5]; },
   };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
