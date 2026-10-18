@@ -376,7 +376,7 @@ export default function ChatPage() {
                   opacity: 0.8,
                 }}
               >
-                {m.role === "user" ? "You" : "Zedu AI"}
+                {m.role === "user" ? "You" : "Zoe"}
               </strong>
 
               {/* Markdown rendering for structured text, lists, and clickable links */}
@@ -445,7 +445,7 @@ export default function ChatPage() {
                 fontStyle: "italic",
               }}
             >
-              Zedu AI is reviewing tabs and formatting...
+              Zoe is reviewing tabs and formatting...
             </div>
           )}
           <div ref={messagesEndRef} />
