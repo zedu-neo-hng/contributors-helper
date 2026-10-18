@@ -29,12 +29,12 @@ export async function POST(req: Request) {
     if (req.headers.get("x-ingest-secret") !== secret) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
-    if (!process.env.OPENROUTER_API_KEY) {
+    if (!process.env.AI_API_KEY) {
       return NextResponse.json({ error: "AI is not configured." }, { status: 503 });
     }
 
     const openRouter = new OpenAI({
-      apiKey: process.env.OPENROUTER_API_KEY,
+      apiKey: process.env.AI_API_KEY,
       baseURL: "https://openrouter.ai/api/v1",
       defaultHeaders: {
         "HTTP-Referer": "https://contributors.zedu.chat",
