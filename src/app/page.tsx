@@ -13,6 +13,9 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
+  const [feedbackOpenIndex, setFeedbackOpenIndex] = useState<number | null>(null);
+  const [feedback, setFeedback] = useState<string>('');
+  const [feedbackSubmittedIndex, setFeedbackSubmittedIndex] = useState<number | null>(null);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -83,6 +86,48 @@ export default function ChatPage() {
                   {m.content}
                 </ReactMarkdown>
               </div>
+              {m.role === 'assistant' && (
+                <div className="message-feedback">
+                  {feedbackSubmittedIndex === idx ? (
+                    <p className="feedback-notice" role="status">Feedback isn’t sent or saved.</p>
+                  ) : feedbackOpenIndex === idx ? (
+                    <form
+                      className="feedback-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        setFeedbackSubmittedIndex(idx);
+                        setFeedbackOpenIndex(null);
+                        setFeedback('');
+                      }}
+                    >
+                      <label htmlFor={`feedback-${idx}`}>What could be better? (optional)</label>
+                      <textarea
+                        id={`feedback-${idx}`}
+                        value={feedback}
+                        onChange={(e) => setFeedback(e.target.value)}
+                        maxLength={250}
+                        rows={3}
+                      />
+                      <div className="feedback-form-footer">
+                        <span aria-live="polite">{feedback.length}/250 characters</span>
+                        <div>
+                          <button type="button" className="feedback-cancel" onClick={() => { setFeedbackOpenIndex(null); setFeedback(''); }}>Cancel</button>
+                          <button type="submit" className="feedback-submit">Submit</button>
+                        </div>
+                      </div>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      className="downvote-button"
+                      aria-expanded={false}
+                      onClick={() => { setFeedbackOpenIndex(idx); setFeedback(''); }}
+                    >
+                      ↓ Not helpful
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
           {loading && <div style={{ color: '#8b949e', fontSize: '0.85rem', fontStyle: 'italic' }}>Zedu AI is reviewing tabs and formatting...</div>}
