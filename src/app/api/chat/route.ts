@@ -1,14 +1,22 @@
-import { NextResponse } from 'next/server';
-import Groq from 'groq-sdk';
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import OpenAI from "openai";
+import { authOptions } from "@/lib/auth";
+import { buildKnowledgeContext, isKnowledgeBaseError } from "@/lib/knowledge";
+import { prisma } from "@/lib/prisma";
 
-const groq = new Groq({ apiKey: process.env.AI_API_KEY });
+async function getAuthenticatedUser() {
+  const session = await getServerSession(authOptions);
+
+  return session?.user ?? null;
+}
 
 const zeduDocContent = `
 === ZEDU TASK DOCUMENTATION ===
-- 📝 Stage 1 Submission Form
+- ≡ƒô¥ Stage 1 Submission Form
 
 
-This is the submission form for the Stage 1 task below. Submit your work here 👉 https://forms.gle/XCeh6TcKjwnFtTCW6 
+This is the submission form for the Stage 1 task below. Submit your work here ≡ƒæë https://forms.gle/XCeh6TcKjwnFtTCW6 
 
 
 Tasks to complete before Wednesday:
@@ -19,10 +27,10 @@ Tasks to complete before Wednesday:
 5. (Advanced) Push your code to your private GitHub
 
 
-⏰ Deadline: Tuesday, 29th, 11:59pm WAT
+ΓÅ░ Deadline: Tuesday, 29th, 11:59pm WAT
 
 
-🎥 Lesson 1 call recording (this morning): https://drive.google.com/file/d/1bJQ-DSdi8cx5WkA9DBRCKnEsyM_7mx5z/view?usp=sharing  
+≡ƒÄÑ Lesson 1 call recording (this morning): https://drive.google.com/file/d/1bJQ-DSdi8cx5WkA9DBRCKnEsyM_7mx5z/view?usp=sharing  
 HNG15 | Lesson 2
 Deadline: Friday, 11:59 PM (WAT)
 
@@ -47,18 +55,18 @@ Set up the group version of Zedu.
 Deadline: Friday, 11:59 PM
 
 
-📌 HNG15 | Lesson 2 Submission
+≡ƒôî HNG15 | Lesson 2 Submission
 
 
-Submit your Stage Two work here 👇🏾
+Submit your Stage Two work here ≡ƒæç≡ƒÅ╛
 https://docs.google.com/forms/d/e/1FAIpQLSewMLKjMDSvoEIIlaPVi3HxVN9Y1ijz1MTBiBjpx5Y1k2GuEw/viewform
 
 
-⏰ Deadline: Friday, 11:59 PM (WAT). Late submissions won't be accepted.
+ΓÅ░ Deadline: Friday, 11:59 PM (WAT). Late submissions won't be accepted.
 
 
-• Task 1 (Individual): everyone submits their shop website.
-• Task 2 (Team): the dev who did the Zedu group setup submits for the team. 
+ΓÇó Task 1 (Individual): everyone submits their shop website.
+ΓÇó Task 2 (Team): the dev who did the Zedu group setup submits for the team. 
 Lesson 3 Task
 Deadline: Monday, 5 October 2026, at 11:59 PM (WAT).
 Individual Task: Build a Mobile App for Your Shop
@@ -72,8 +80,8 @@ ________________
 
 
 
-Team Task: Present Your Team’s Version of Zedu
-Present your team’s version of Zedu. Every team member must edit at least one piece of text and ensure their change is merged into the central staging branch and deployed to production.
+Team Task: Present Your TeamΓÇÖs Version of Zedu
+Present your teamΓÇÖs version of Zedu. Every team member must edit at least one piece of text and ensure their change is merged into the central staging branch and deployed to production.
 Stage 2 eligibility: Only team members whose text changes are live in production will qualify to advance to Stage 2 of HNG15.
 You have two things to submit. 
 First is a github PR link of your contribution in your team, and then the mobile application version of your eCommerce website from lesson 2.
@@ -97,7 +105,7 @@ In the video, demonstrate the following:
 Important
    * The video should clearly show the web application and mobile application during the demonstration.
    * The login must use the same user account on both platforms.
-   * The cart must synchronize in both directions: Web → Mobile and Mobile → Web.
+   * The cart must synchronize in both directions: Web ΓåÆ Mobile and Mobile ΓåÆ Web.
    * Please demonstrate the application running on a physical mobile device.
    * Keep the video focused on the required functionality. No long introductions or explanations are necessary.
    * Submit one continuous recording where possible; avoid editing together separate clips.
@@ -160,7 +168,7 @@ You can choose:
 Find something small and specific and redesign/improve it.
 
 The suggested workflow is:
-Screenshot existing UI → give it to Claude/another AI → generate an improved design → submit the design as a ticket → get approval → implement it.
+Screenshot existing UI ΓåÆ give it to Claude/another AI ΓåÆ generate an improved design ΓåÆ submit the design as a ticket ΓåÆ get approval ΓåÆ implement it.
 
 
 Task 3: Team task
@@ -199,7 +207,7 @@ ________________
 Task 5: Mobile or desktop contribution
 Everyone must make at least one contribution to either mobile or desktop.
 There have been too many web tickets and too few mobile/desktop tickets, so contributions now need to be distributed across platforms.
-The fix can be very small.✌️
+The fix can be very small.Γ£î∩╕Å
 
 
 
@@ -238,34 +246,253 @@ Addition to the process moving forward
 Slide link: https://docs.google.com/presentation/d/1kvzASBYU2ywPQlQxlsbPG75MXStg0nf8oclJMWRrTTM/edit?usp=drivesdk
 `;
 
-
-const systemPrompt = `
-You are  Zoe, the official Zedu Contributor Assistant. Your job is to help interns find tasks, guidelines, and resources from the official Zedu project document.
+function buildSystemPrompt(knowledgeContext: string) {
+  return `
+You are  Zoe, the official Zedu Contributor Assistant. Your job is to help interns find tasks, guidelines, and resources from the official Zedu project document and the cohort's own calls.
 
 Strict Rules you MUST follow:
-1. **Source of Truth:** Answer questions based ONLY on the document content provided below. Never invent, guess, or bring in external bootcamp information (e.g., do not talk about shop websites, mobile APKs, or external tech stacks unless they are explicitly in the text).
-2. **Clarification First:** If a user asks about something ambiguous or a timeframe (like "Week 2") that does not have an exact match in the document, do not guess or map it arbitrarily. Instead, briefly ask a clarifying question (e.g., "I couldn't find an exact match for 'Week 2' in the tabs. Did you mean Task X or Tab Y?").
+1. **Source of Truth:** Answer questions based ONLY on the content provided below. Never invent, guess, or bring in external bootcamp information (e.g., do not talk about shop websites, mobile APKs, or external tech stacks unless they are explicitly in the text).
+2. **Clarification First:** If a user asks about something ambiguous or a timeframe (like "Week 2") that does not have an exact match in the provided context, do not guess or map it arbitrarily. Instead, briefly ask a clarifying question (e.g., "I couldn't find an exact match for 'Week 2' in the provided context. Did you mean Task X or Tab Y?").
 3. **Clean Formatting:** Always use structured Markdown (headings, bullet points, bold text) for readability. Never output a dense wall of text.
 4. **Rich Resource Links:** Whenever a video, slide deck, or submission link appears in the text relative to the answer, format it cleanly as a clickable Markdown link (e.g., [Submission Form](URL), [Video Guide](URL), [Slide Deck](URL)).
+5. **Two Sources, Both Authoritative:** The "OFFICIAL ZEDU DOCUMENTATION" section holds the task specs and submission requirements. The "COHORT CALL KNOWLEDGE" section holds what was actually said and decided on the cohort's calls (team assignments, process changes, deadlines and Q&A from the meetings). Use the documentation for task requirements and the call knowledge for anything discussed on a call - which team is doing what, what was announced, what was decided. Consult BOTH sections before answering, and never report that a topic is missing or unavailable without searching the cohort call knowledge as well. If the two disagree, say so plainly instead of silently choosing one. If a "CALL TRANSCRIPT — EXACT WORDING" section is present, quote it when the user needs the exact words that were used.
+6. **Answer Only What Was Asked:** Keep the reply proportional to the question. A greeting, small talk, or a simple question gets a short conversational reply (one or two sentences) plus an offer to help - never a summary of tasks, deadlines, or knowledge-base content the user did not ask for. Save structured, detailed answers for substantive questions about tasks, deadlines, teams, or processes.
 
 === OFFICIAL ZEDU DOCUMENTATION ===
 ${zeduDocContent}
+
+${knowledgeContext}
 `;
+}
+
+export async function GET() {
+  try {
+    const user = await getAuthenticatedUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    return NextResponse.json(
+      { error: "Method not allowed" },
+      { status: 405, headers: { Allow: "POST" } },
+    );
+  } catch (error) {
+    console.error("Chat API authentication failed:", error);
+
+    return NextResponse.json(
+      { error: "Unable to authenticate chat request." },
+      { status: 500 },
+    );
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
+    const user = await getAuthenticatedUser();
 
-    const chatCompletion = await groq.chat.completions.create({
-      model: "qwen/qwen3.8-27b",
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages
-      ],
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!process.env.AI_API_KEY) {
+      return NextResponse.json(
+        { error: "AI service is not configured." },
+        { status: 503 },
+      );
+    }
+
+    const openRouter = new OpenAI({
+      apiKey: process.env.AI_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": "https://contributors.zedu.chat",
+        "X-Title": "Zedu Contributors Helper",
+      },
     });
 
-    const reply = chatCompletion.choices[0]?.message?.content || "No response.";
-    return NextResponse.json({ reply });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    let body: unknown;
+
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON request body." },
+        { status: 400 },
+      );
+    }
+
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      !("messages" in body) ||
+      !Array.isArray(body.messages)
+    ) {
+      return NextResponse.json(
+        { error: "Expected a messages array." },
+        { status: 400 },
+      );
+    }
+
+    const messages = body.messages;
+
+    const validMessages = messages.every(
+      (message: unknown) =>
+        typeof message === "object" &&
+        message !== null &&
+        "role" in message &&
+        "content" in message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string",
+    );
+
+    if (!validMessages) {
+      return NextResponse.json(
+        { error: "Invalid messages." },
+        { status: 400 },
+      );
+    }
+
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((message) => message?.role === "user");
+
+    let knowledgeContext: string;
+
+    try {
+      knowledgeContext = await buildKnowledgeContext(
+        typeof lastUserMessage?.content === "string" ? lastUserMessage.content : "",
+      );
+    } catch (error) {
+      if (isKnowledgeBaseError(error)) {
+        console.error("Chat API knowledge base unavailable:", error.message);
+
+        return NextResponse.json(
+          { error: "Knowledge base is unavailable." },
+          { status: 503 },
+        );
+      }
+
+      throw error;
+    }
+
+    const systemPrompt = buildSystemPrompt(knowledgeContext);
+
+    // Restored history makes requests grow without bound; the model only needs the recent tail.
+    const recentMessages = messages.slice(-30);
+
+    // Persistence is best-effort: a database outage must never block a reply.
+    let chatId: string | null = null;
+
+    if (user.id && lastUserMessage) {
+      try {
+        await prisma.user.upsert({
+          where: { id: user.id },
+          update: {},
+          create: { id: user.id },
+        });
+
+        const chat =
+          (await prisma.chat.findFirst({
+            where: { userId: user.id },
+            orderBy: { createdAt: "asc" },
+          })) ?? (await prisma.chat.create({ data: { userId: user.id } }));
+
+        await prisma.message.create({
+          data: {
+            chatId: chat.id,
+            role: "user",
+            content: lastUserMessage.content,
+          },
+        });
+
+        chatId = chat.id;
+      } catch (error) {
+        console.error("Chat API could not persist the user message:", error);
+      }
+    }
+
+    let completion;
+
+    try {
+      completion = await openRouter.chat.completions.create(
+        {
+          model: "deepseek/deepseek-v4-flash-0731",
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...recentMessages,
+          ],
+          stream: true,
+        },
+        { signal: req.signal },
+      );
+    } catch (error) {
+      console.error("Chat API model request failed:", error);
+
+      return NextResponse.json(
+        { error: "Unable to process your chat request." },
+        { status: 502 },
+      );
+    }
+
+    const encoder = new TextEncoder();
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (payload: { delta?: string; error?: string }) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        };
+
+        let reply = "";
+
+        try {
+          for await (const chunk of completion) {
+            const delta = chunk.choices[0]?.delta?.content;
+
+            if (delta) {
+              reply += delta;
+              send({ delta });
+            }
+          }
+
+          if (chatId && reply) {
+            try {
+              await prisma.message.create({
+                data: { chatId, role: "assistant", content: reply },
+              });
+            } catch (error) {
+              console.error("Chat API could not persist the assistant reply:", error);
+            }
+          }
+        } catch (error) {
+          if (!req.signal?.aborted) {
+            console.error("Chat API stream interrupted:", error);
+
+            try {
+              send({ error: "The response was interrupted. Please try again." });
+            } catch {
+              // The client already disconnected.
+            }
+          }
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  } catch (error) {
+    console.error("Chat API request failed:", error);
+
+    return NextResponse.json(
+      { error: "Unable to process your chat request." },
+      { status: 500 },
+    );
   }
 }
