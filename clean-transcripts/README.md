@@ -50,6 +50,10 @@ better always-on context, and the full text is only needed occasionally.
   breaks and sentence casing. Because it only deletes and reflows, **it cannot invent content**.
   Verified clean of residual timestamps, BOM/zero-width characters, rule lines, stuttered words and
   orphaned punctuation.
+- The cleaner itself lives at [`../scripts/clean-transcripts.mjs`](../scripts/clean-transcripts.mjs).
+  `node scripts/clean-transcripts.mjs` re-cleans `transcripts/` into `clean-transcripts/transcripts/`
+  and reproduces every committed `*.cleaned.md` file byte-for-byte. `--in <dir>` / `--out <dir>` point
+  it at another folder of tactiq-style captures (`.md` or `.txt`; other file types are ignored).
 - **Summaries** are an extract-only LLM pass over the *cleaned* text, never the raw text, under
   strict rules: nothing may be stated that is not traceable to the transcript, no attribution is
   invented where the source has no speaker labels, and uncertain names or terms are marked `[?]`.

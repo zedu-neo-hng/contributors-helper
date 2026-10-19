@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { saveStaged } from "@/lib/storage";
+import { prisma } from "@/lib/prisma";
+import { hasIngestAccess } from "@/lib/ingestAccess";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,15 @@ const ALLOWED = new Set([".pdf", ".md", ".txt"]);
 
 export async function POST(req: Request) {
   try {
+    // Admins upload from the UI with their session cookie. There is no shared-secret path in.
+    const access = await hasIngestAccess();
+    if (!access.ok) {
+      return NextResponse.json(
+        { error: access.viewer ? "Admin access required." : "Unauthorized." },
+        { status: access.viewer ? 403 : 401 },
+      );
+    }
+
     const contentLength = Number(req.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > MAX_SIZE) {
       return NextResponse.json({ error: "File too large. Max 5 MB." }, { status: 413 });
@@ -25,14 +35,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing or empty 'file' field." }, { status: 400 });
     }
 
-    let uploaderId = "anonymous";
-    const rawUploader = form.get("uploaderId");
-    if (rawUploader !== null) {
-      if (typeof rawUploader !== "string" || rawUploader.length < 1 || rawUploader.length > 100) {
-        return NextResponse.json({ error: "uploaderId must be 1 to 100 chars." }, { status: 400 });
-      }
-      uploaderId = rawUploader;
-    }
+    // The uploader is whoever is signed in; a form field cannot claim to be someone else.
+    const uploaderId = access.viewer.id;
 
     const originalName = file.name || "upload";
     const dot = originalName.lastIndexOf(".");
@@ -49,8 +53,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not a valid PDF file." }, { status: 400 });
     }
 
-    const meta = await saveStaged(bytes, { originalName, ext, uploaderId });
-    return NextResponse.json(meta);
+    const created = await prisma.stagedDocument.create({
+      data: { filename: originalName, ext, uploaderId, data: bytes },
+    });
+
+    return NextResponse.json({
+      id: created.id,
+      originalName: created.filename,
+      ext: created.ext,
+      uploaderId: created.uploaderId,
+      uploadedAt: created.uploadedAt.toISOString(),
+      status: created.status,
+    });
   } catch {
     return NextResponse.json({ error: "Upload failed." }, { status: 500 });
   }

@@ -25,13 +25,24 @@ const historySource = transpile('src/app/api/chat/history/route.ts');
 const knowledgeSource = transpile('src/lib/knowledge.ts');
 
 // Evaluates the knowledge module with KNOWLEDGE_DIR applied at load time, since the module resolves
-// the directory on import.
-function loadKnowledge(knowledgeDir) {
+// the directory on import. `ingested` stands in for the ingested-document rows the loader reads
+// from the database.
+function loadKnowledge(knowledgeDir, ingested = []) {
   const previous = process.env.KNOWLEDGE_DIR;
   if (knowledgeDir === undefined) delete process.env.KNOWLEDGE_DIR;
   else process.env.KNOWLEDGE_DIR = knowledgeDir;
   try {
-    const context = { exports: {}, require, process, console };
+    const context = {
+      exports: {},
+      process,
+      console,
+      require(name) {
+        if (name === '@/lib/prisma') {
+          return { __esModule: true, prisma: { ingestedDocument: { findMany: async () => ingested } } };
+        }
+        return require(name);
+      },
+    };
     vm.runInNewContext(knowledgeSource, context);
     return context.exports;
   } finally {
@@ -73,11 +84,11 @@ async function sse(response) {
     .map(line => JSON.parse(line.slice('data: '.length)));
 }
 
-function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA', id: 'synthetic-google-id' } }, throwOn } = {}) {
+function harness({ knowledgeDir, ingested, session = { user: { name: 'Synthetic QA', id: 'synthetic-google-id' } }, throwOn } = {}) {
   const calls = [];
   const errors = [];
   const db = { upserts: [], chatsCreated: 0, messages: [] };
-  const knowledge = loadKnowledge(knowledgeDir);
+  const knowledge = loadKnowledge(knowledgeDir, ingested);
 
   const die = role => {
     if (throwOn === role) throw new Error('database down');
@@ -261,6 +272,33 @@ test('POST attaches a cleaned transcript only when the question points at one ca
     );
   } finally {
     vague.restore();
+  }
+});
+
+test('POST injects ingested document knowledge from the database', async () => {
+  const h = harness({
+    ingested: [
+      {
+        title: 'zebu_flamingo_onboarding_portal',
+        summary: '## Key Decisions\nThe onboarding portal ships on Friday.',
+        cleaned: 'verbatim portal wording nobody else contains',
+      },
+    ],
+  });
+
+  try {
+    const response = await h.post([{ role: 'user', content: 'when does the zebu flamingo onboarding portal ship' }]);
+
+    assert.equal(response.status, 200);
+    const system = systemContentOf(h.calls[0]);
+    assert.ok(system.includes('The onboarding portal ships on Friday.'), 'ingested summaries are always on');
+    assert.ok(
+      system.includes('=== CALL TRANSCRIPT — EXACT WORDING (zebu_flamingo_onboarding_portal)'),
+      'an ingested document attaches like a call transcript',
+    );
+    assert.ok(system.includes('verbatim portal wording nobody else contains'));
+  } finally {
+    h.restore();
   }
 });
 

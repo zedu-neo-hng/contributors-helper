@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { messagePlainText } from '../lib/messagePlainText';
 import styles from './chat.module.css';
-import DocumentUpload from '@/components/DocumentUpload';
+import IngestPanel from '@/components/IngestPanel';
 import { signIn, signOut, useSession } from "next-auth/react";
 
 
@@ -600,7 +600,7 @@ export default function ChatPage() {
           </button>
         </form>
       </div>
-      <DocumentUpload />
+      <IngestPanel />
     </main>
   );
 }

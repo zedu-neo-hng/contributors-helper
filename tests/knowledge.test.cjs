@@ -20,13 +20,27 @@ function transpile(target) {
 // Matches tsconfig.json so the loaded module behaves as it does in a real build.
 const compiled = transpile(ts.ScriptTarget.ES2017);
 
-// Loads a fresh instance of the module so KNOWLEDGE_DIR can be pointed at a fixture directory.
-function loadModule(knowledgeDir, code = compiled) {
+// Loads a fresh instance of the module so KNOWLEDGE_DIR can be pointed at a fixture directory and
+// the database (the ingested-document source) can be stubbed or made to fail.
+function loadModule(knowledgeDir, code = compiled, prisma, consoleOverride) {
   const previous = process.env.KNOWLEDGE_DIR;
   if (knowledgeDir === undefined) delete process.env.KNOWLEDGE_DIR;
   else process.env.KNOWLEDGE_DIR = knowledgeDir;
   try {
-    const context = { exports: {}, require, process, console };
+    const context = {
+      exports: {},
+      process,
+      console: consoleOverride ?? console,
+      require(name) {
+        if (name === '@/lib/prisma') {
+          return {
+            __esModule: true,
+            prisma: prisma ?? { ingestedDocument: { findMany: async () => [] } },
+          };
+        }
+        return require(name);
+      },
+    };
     vm.runInNewContext(code, context);
     return context.exports;
   } finally {
@@ -115,6 +129,57 @@ test('buildKnowledgeContext always injects summaries and attaches a transcript o
   assert.ok(pointed.includes('COHORT CALL KNOWLEDGE'));
   assert.ok(pointed.includes('CALL TRANSCRIPT'));
   assert.ok(pointed.includes('2026-10-16_call_9'));
+});
+
+test('ingested documents join the summaries and attach their cleaned text on demand', async () => {
+  const findMany = async () => [
+    {
+      title: 'zebu_flamingo_onboarding_portal',
+      summary: '## Key Decisions\nThe onboarding portal ships on Friday.',
+      cleaned: 'verbatim portal wording nobody else contains',
+    },
+  ];
+  const knowledge = loadModule(undefined, compiled, { ingestedDocument: { findMany } });
+  const knowledgeBase = await knowledge.loadKnowledgeBase();
+
+  const summaryFiles = fs
+    .readdirSync('clean-transcripts/summaries')
+    .filter((name) => name.endsWith('.summary.md'));
+  assert.equal(knowledgeBase.index.length, summaryFiles.length + 1);
+  assert.ok(knowledgeBase.summaries.includes('The onboarding portal ships on Friday.'));
+
+  const context = await knowledge.buildKnowledgeContext('when does the zebu flamingo onboarding portal ship');
+  assert.ok(context.includes('CALL TRANSCRIPT'), 'an ingested document is selectable like a session');
+  assert.ok(context.includes('zebu_flamingo_onboarding_portal'));
+  assert.ok(context.includes('verbatim portal wording nobody else contains'));
+});
+
+test('a database outage degrades to the committed corpus instead of failing', async () => {
+  const errors = [];
+  const consoleOverride = { error: (...args) => errors.push(args.map(String).join(' ')), warn() {}, log() {} };
+  const knowledge = loadModule(
+    undefined,
+    compiled,
+    {
+      ingestedDocument: {
+        findMany: async () => {
+          throw new Error('connection refused');
+        },
+      },
+    },
+    consoleOverride,
+  );
+
+  const knowledgeBase = await knowledge.loadKnowledgeBase();
+
+  const summaryFiles = fs
+    .readdirSync('clean-transcripts/summaries')
+    .filter((name) => name.endsWith('.summary.md'));
+  assert.equal(knowledgeBase.index.length, summaryFiles.length, 'file sessions must survive the outage');
+
+  const context = await knowledge.buildKnowledgeContext('hello');
+  assert.ok(context.includes('COHORT CALL KNOWLEDGE'));
+  assert.ok(errors.some((text) => text.includes('Ingested knowledge is unavailable')));
 });
 
 test('loadKnowledgeBase fails loudly when the knowledge directory is missing', async () => {
