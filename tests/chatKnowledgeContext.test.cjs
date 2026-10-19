@@ -48,7 +48,10 @@ function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA' } } } 
         completions: {
           async create(payload) {
             calls.push(payload);
-            return { choices: [{ message: { content: 'stub reply' } }] };
+            // The route streams, so the stub must return an async iterable of chunks.
+            return (async function* () {
+              yield { choices: [{ delta: { content: 'stub reply' } }] };
+            })();
           },
         },
       };
@@ -59,6 +62,10 @@ function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA' } } } 
     exports: {},
     process,
     console,
+    // Web globals the streaming route uses to build its SSE response.
+    TextEncoder,
+    ReadableStream,
+    Response,
     require(name) {
       if (name === 'next/server') {
         return {
