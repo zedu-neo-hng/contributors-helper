@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import OpenAI from "openai";
 import { authOptions } from "@/lib/auth";
+import { buildKnowledgeContext, isKnowledgeBaseError } from "@/lib/knowledge";
 
 async function getUnauthorizedResponse() {
   const session = await getServerSession(authOptions);
@@ -246,18 +247,24 @@ Addition to the process moving forward
 Slide link: https://docs.google.com/presentation/d/1kvzASBYU2ywPQlQxlsbPG75MXStg0nf8oclJMWRrTTM/edit?usp=drivesdk
 `;
 
-const systemPrompt = `
-You are  Zoe, the official Zedu Contributor Assistant. Your job is to help interns find tasks, guidelines, and resources from the official Zedu project document.
+function buildSystemPrompt(knowledgeContext: string) {
+  return `
+You are  Zoe, the official Zedu Contributor Assistant. Your job is to help interns find tasks, guidelines, and resources from the official Zedu project document and the cohort's own calls.
 
 Strict Rules you MUST follow:
-1. **Source of Truth:** Answer questions based ONLY on the document content provided below. Never invent, guess, or bring in external bootcamp information (e.g., do not talk about shop websites, mobile APKs, or external tech stacks unless they are explicitly in the text).
-2. **Clarification First:** If a user asks about something ambiguous or a timeframe (like "Week 2") that does not have an exact match in the document, do not guess or map it arbitrarily. Instead, briefly ask a clarifying question (e.g., "I couldn't find an exact match for 'Week 2' in the tabs. Did you mean Task X or Tab Y?").
+1. **Source of Truth:** Answer questions based ONLY on the content provided below. Never invent, guess, or bring in external bootcamp information (e.g., do not talk about shop websites, mobile APKs, or external tech stacks unless they are explicitly in the text).
+2. **Clarification First:** If a user asks about something ambiguous or a timeframe (like "Week 2") that does not have an exact match in the provided context, do not guess or map it arbitrarily. Instead, briefly ask a clarifying question (e.g., "I couldn't find an exact match for 'Week 2' in the provided context. Did you mean Task X or Tab Y?").
 3. **Clean Formatting:** Always use structured Markdown (headings, bullet points, bold text) for readability. Never output a dense wall of text.
 4. **Rich Resource Links:** Whenever a video, slide deck, or submission link appears in the text relative to the answer, format it cleanly as a clickable Markdown link (e.g., [Submission Form](URL), [Video Guide](URL), [Slide Deck](URL)).
+5. **Two Sources, Both Authoritative:** The "OFFICIAL ZEDU DOCUMENTATION" section holds the task specs and submission requirements. The "COHORT CALL KNOWLEDGE" section holds what was actually said and decided on the cohort's calls (team assignments, process changes, deadlines and Q&A from the meetings). Use the documentation for task requirements and the call knowledge for anything discussed on a call - which team is doing what, what was announced, what was decided. Consult BOTH sections before answering, and never report that a topic is missing or unavailable without searching the cohort call knowledge as well. If the two disagree, say so plainly instead of silently choosing one. If a "CALL TRANSCRIPT — EXACT WORDING" section is present, quote it when the user needs the exact words that were used.
+6. **Answer Only What Was Asked:** Keep the reply proportional to the question. A greeting, small talk, or a simple question gets a short conversational reply (one or two sentences) plus an offer to help - never a summary of tasks, deadlines, or knowledge-base content the user did not ask for. Save structured, detailed answers for substantive questions about tasks, deadlines, teams, or processes.
 
 === OFFICIAL ZEDU DOCUMENTATION ===
 ${zeduDocContent}
+
+${knowledgeContext}
 `;
+}
 
 export async function GET() {
   try {
@@ -347,15 +354,87 @@ export async function POST(req: Request) {
       );
     }
 
-    const chatCompletion = await openRouter.chat.completions.create({
-      model: "deepseek/deepseek-v4-flash-0731:floor",
-      messages: [{ role: "system", content: systemPrompt }, ...messages],
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((message) => message?.role === "user");
+
+    let knowledgeContext: string;
+
+    try {
+      knowledgeContext = await buildKnowledgeContext(
+        typeof lastUserMessage?.content === "string" ? lastUserMessage.content : "",
+      );
+    } catch (error) {
+      if (isKnowledgeBaseError(error)) {
+        console.error("Chat API knowledge base unavailable:", error.message);
+
+        return NextResponse.json(
+          { error: "Knowledge base is unavailable." },
+          { status: 503 },
+        );
+      }
+
+      throw error;
+    }
+
+    const systemPrompt = buildSystemPrompt(knowledgeContext);
+
+    let completion;
+
+    try {
+      completion = await openRouter.chat.completions.create(
+        {
+          model: "deepseek/deepseek-v4-flash-0731",
+          messages: [{ role: "system", content: systemPrompt }, ...messages],
+          stream: true,
+        },
+        { signal: req.signal },
+      );
+    } catch (error) {
+      console.error("Chat API model request failed:", error);
+
+      return NextResponse.json(
+        { error: "Unable to process your chat request." },
+        { status: 502 },
+      );
+    }
+
+    const encoder = new TextEncoder();
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (payload: { delta?: string; error?: string }) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        };
+
+        try {
+          for await (const chunk of completion) {
+            const delta = chunk.choices[0]?.delta?.content;
+
+            if (delta) send({ delta });
+          }
+        } catch (error) {
+          if (!req.signal?.aborted) {
+            console.error("Chat API stream interrupted:", error);
+
+            try {
+              send({ error: "The response was interrupted. Please try again." });
+            } catch {
+              // The client already disconnected.
+            }
+          }
+        } finally {
+          controller.close();
+        }
+      },
     });
 
-    const reply = chatCompletion.choices[0]?.message?.content;
-
-    return NextResponse.json({
-      reply: reply || "No response.",
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      },
     });
   } catch (error) {
     console.error("Chat API request failed:", error);
