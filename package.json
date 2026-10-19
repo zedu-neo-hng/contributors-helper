@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start -p ${PORT:-3000}",
-    "lint": "next lint"
+    "start": "next start",
+    "lint": "next lint",
+    "test": "node --test"
   },
   "dependencies": {
     "groq-sdk": "^1.6.0",

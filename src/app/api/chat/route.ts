@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
 
-const groq = new Groq({ apiKey: process.env.AI_API_KEY });
-
 const zeduDocContent = `
 === ZEDU TASK DOCUMENTATION ===
 - 📝 Stage 1 Submission Form
@@ -253,8 +251,12 @@ ${zeduDocContent}
 `;
 export async function POST(req: Request) {
   try {
+    if (!process.env.AI_API_KEY) {
+      return NextResponse.json({ error: 'The chat provider is not configured.' }, { status: 503 });
+    }
     const { messages } = await req.json();
 
+    const groq = new Groq({ apiKey: process.env.AI_API_KEY });
     const chatCompletion = await groq.chat.completions.create({
       model: "qwen/qwen3.8-27b",
       messages: [
