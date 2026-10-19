@@ -1,15 +1,19 @@
 import { NextResponse } from "next/server";
-import { readFile } from "fs/promises";
-import path from "path";
 import OpenAI from "openai";
 import { extractText, getDocumentProxy } from "unpdf";
-import { DATA_DIR, appendKnowledge, listStaged, markIngested } from "@/lib/storage";
+import { cleanTranscriptText } from "@/lib/cleanText";
+import { prisma } from "@/lib/prisma";
+import {
+  SUMMARIZE_MODEL,
+  buildSummarizePrompt,
+  chunkForSummarize,
+  mergeChunkSummaries,
+} from "@/lib/summarize";
 
 export const dynamic = "force-dynamic";
 
-const MAX_CHARS = 12000;
-
-const SYSTEM_PROMPT = `Turn the document text into clean Markdown with exactly three sections: "## Key Decisions", "## Action Items", "## Q&A". Use only information from the text. For a section with nothing to report, write "None found." Do not invent content.`;
+const SYSTEM_PROMPT = (documentDate: string, part: number, totalParts: number) =>
+  buildSummarizePrompt(documentDate, part, totalParts);
 
 function stageError(stage: string, e: unknown): string {
   const msg = e instanceof Error ? e.message : "";
@@ -41,46 +45,81 @@ export async function POST(req: Request) {
         "X-Title": "Zedu Contributors Helper",
       },
     });
-    const staged = (await listStaged()).sort((a, b) => a.uploadedAt.localeCompare(b.uploadedAt));
+
+    const staged = await prisma.stagedDocument.findMany({
+      where: { status: "STAGED" },
+      orderBy: { uploadedAt: "asc" },
+    });
     const processed: string[] = [];
     const failed: { id: string; error: string }[] = [];
 
-    for (const meta of staged) {
+    for (const doc of staged) {
       let stage = "read";
       try {
-        const raw = await readFile(path.join(DATA_DIR, `${meta.id}${meta.ext}`));
+        const bytes = new Uint8Array(doc.data);
         let text: string;
-        if (meta.ext === ".pdf") {
+        if (doc.ext === ".pdf") {
           stage = "parse";
-          const pdf = await getDocumentProxy(new Uint8Array(raw));
+          const pdf = await getDocumentProxy(bytes);
           const { text: out } = await extractText(pdf, { mergePages: true });
           text = Array.isArray(out) ? out.join("\n") : out;
         } else {
-          text = raw.toString("utf8");
+          text = Buffer.from(bytes).toString("utf8");
         }
-        if (!text.trim()) throw new Error("empty-text");
+
+        stage = "clean";
+        const cleaned = cleanTranscriptText(text);
+        if (!cleaned) throw new Error("empty-text");
+
+        // Chunked instead of truncated: every part of the document reaches the summariser.
         stage = "ai";
-        const completion = await openRouter.chat.completions.create({
-          model: "openai/gpt-oss-20b:floor",
-          max_tokens: 800, // account OTPM limit is 1000; the model default (2048) gets 429'd
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: text.slice(0, MAX_CHARS) },
-          ],
-        });
-        const structured = completion.choices[0]?.message?.content?.trim();
-        if (!structured) throw new Error("empty-ai");
+        const chunks = chunkForSummarize(cleaned);
+        const parts: string[] = [];
+        for (let index = 0; index < chunks.length; index++) {
+          const completion = await openRouter.chat.completions.create({
+            model: SUMMARIZE_MODEL,
+            messages: [
+              {
+                role: "system",
+                content: SYSTEM_PROMPT(
+                  doc.uploadedAt.toISOString().slice(0, 10),
+                  index + 1,
+                  chunks.length,
+                ),
+              },
+              { role: "user", content: chunks[index] },
+            ],
+          });
+          const part = completion.choices[0]?.message?.content?.trim();
+          if (!part) throw new Error("empty-ai");
+          parts.push(part);
+        }
+
+        const summary = mergeChunkSummaries(parts);
+        if (!summary.trim()) throw new Error("empty-ai");
+
         stage = "save";
-        await appendKnowledge(`# Source: ${meta.originalName} (${meta.uploadedAt})\n\n${structured}\n\n`);
-        await markIngested(meta.id);
-        processed.push(meta.id);
+        const title = doc.filename.replace(/\.[^.]+$/, "");
+        await prisma.$transaction([
+          prisma.ingestedDocument.upsert({
+            where: { sourceId: doc.id },
+            update: { title, summary, cleaned },
+            create: { sourceId: doc.id, title, summary, cleaned },
+          }),
+          prisma.stagedDocument.update({
+            where: { id: doc.id },
+            data: { status: "INGESTED" },
+          }),
+        ]);
+        processed.push(doc.id);
       } catch (e) {
-        console.error(`ingest failed for file ${meta.id} at stage ${stage}:`, e);
-        failed.push({ id: meta.id, error: stageError(stage, e) });
+        // The document stays STAGED so a later ingest run can retry it.
+        console.error(`ingest failed for file ${doc.id} at stage ${stage}:`, e);
+        failed.push({ id: doc.id, error: stageError(stage, e) });
       }
     }
 
-    const remaining = (await listStaged()).length;
+    const remaining = await prisma.stagedDocument.count({ where: { status: "STAGED" } });
     return NextResponse.json({ processed, failed, remaining });
   } catch {
     return NextResponse.json({ error: "Ingest failed." }, { status: 500 });

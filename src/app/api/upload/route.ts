@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { saveStaged } from "@/lib/storage";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +8,15 @@ const ALLOWED = new Set([".pdf", ".md", ".txt"]);
 
 export async function POST(req: Request) {
   try {
+    // Upload is operator tooling with no UI, so it is gated by the same shared secret as ingest.
+    const secret = process.env.INGEST_SECRET;
+    if (!secret) {
+      return NextResponse.json({ error: "Upload is not configured." }, { status: 503 });
+    }
+    if (req.headers.get("x-ingest-secret") !== secret) {
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    }
+
     const contentLength = Number(req.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > MAX_SIZE) {
       return NextResponse.json({ error: "File too large. Max 5 MB." }, { status: 413 });
@@ -49,8 +58,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not a valid PDF file." }, { status: 400 });
     }
 
-    const meta = await saveStaged(bytes, { originalName, ext, uploaderId });
-    return NextResponse.json(meta);
+    const created = await prisma.stagedDocument.create({
+      data: { filename: originalName, ext, uploaderId, data: bytes },
+    });
+
+    return NextResponse.json({
+      id: created.id,
+      originalName: created.filename,
+      ext: created.ext,
+      uploaderId: created.uploaderId,
+      uploadedAt: created.uploadedAt.toISOString(),
+      status: created.status,
+    });
   } catch {
     return NextResponse.json({ error: "Upload failed." }, { status: 500 });
   }
