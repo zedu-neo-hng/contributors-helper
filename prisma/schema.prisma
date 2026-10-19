@@ -33,3 +33,26 @@ model Message {
 
   @@index([chatId])
 }
+
+model StagedDocument {
+  id         String   @id @default(cuid())
+  filename   String
+  ext        String
+  uploaderId String
+  uploadedAt DateTime @default(now())
+  status     String   @default("STAGED")
+  data       Bytes
+  ingested   IngestedDocument?
+
+  @@index([status])
+}
+
+model IngestedDocument {
+  id        String         @id @default(cuid())
+  sourceId  String         @unique
+  source    StagedDocument @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  title     String
+  summary   String         @db.Text
+  cleaned   String         @db.Text
+  createdAt DateTime       @default(now())
+}
