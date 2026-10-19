@@ -3,13 +3,12 @@ import { getServerSession } from "next-auth";
 import OpenAI from "openai";
 import { authOptions } from "@/lib/auth";
 import { buildKnowledgeContext, isKnowledgeBaseError } from "@/lib/knowledge";
+import { prisma } from "@/lib/prisma";
 
-async function getUnauthorizedResponse() {
+async function getAuthenticatedUser() {
   const session = await getServerSession(authOptions);
 
-  return session?.user
-    ? null
-    : NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return session?.user ?? null;
 }
 
 const zeduDocContent = `
@@ -268,10 +267,10 @@ ${knowledgeContext}
 
 export async function GET() {
   try {
-    const unauthorizedResponse = await getUnauthorizedResponse();
+    const user = await getAuthenticatedUser();
 
-    if (unauthorizedResponse) {
-      return unauthorizedResponse;
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     return NextResponse.json(
@@ -290,10 +289,10 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const unauthorizedResponse = await getUnauthorizedResponse();
+    const user = await getAuthenticatedUser();
 
-    if (unauthorizedResponse) {
-      return unauthorizedResponse;
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     if (!process.env.AI_API_KEY) {
@@ -347,9 +346,9 @@ export async function POST(req: Request) {
         typeof message.content === "string",
     );
 
-    if (!validMessages || messages.length > 50) {
+    if (!validMessages) {
       return NextResponse.json(
-        { error: "Invalid messages or too many messages." },
+        { error: "Invalid messages." },
         { status: 400 },
       );
     }
@@ -379,13 +378,50 @@ export async function POST(req: Request) {
 
     const systemPrompt = buildSystemPrompt(knowledgeContext);
 
+    // Restored history makes requests grow without bound; the model only needs the recent tail.
+    const recentMessages = messages.slice(-30);
+
+    // Persistence is best-effort: a database outage must never block a reply.
+    let chatId: string | null = null;
+
+    if (user.id && lastUserMessage) {
+      try {
+        await prisma.user.upsert({
+          where: { id: user.id },
+          update: {},
+          create: { id: user.id },
+        });
+
+        const chat =
+          (await prisma.chat.findFirst({
+            where: { userId: user.id },
+            orderBy: { createdAt: "asc" },
+          })) ?? (await prisma.chat.create({ data: { userId: user.id } }));
+
+        await prisma.message.create({
+          data: {
+            chatId: chat.id,
+            role: "user",
+            content: lastUserMessage.content,
+          },
+        });
+
+        chatId = chat.id;
+      } catch (error) {
+        console.error("Chat API could not persist the user message:", error);
+      }
+    }
+
     let completion;
 
     try {
       completion = await openRouter.chat.completions.create(
         {
           model: "deepseek/deepseek-v4-flash-0731",
-          messages: [{ role: "system", content: systemPrompt }, ...messages],
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...recentMessages,
+          ],
           stream: true,
         },
         { signal: req.signal },
@@ -407,11 +443,26 @@ export async function POST(req: Request) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
         };
 
+        let reply = "";
+
         try {
           for await (const chunk of completion) {
             const delta = chunk.choices[0]?.delta?.content;
 
-            if (delta) send({ delta });
+            if (delta) {
+              reply += delta;
+              send({ delta });
+            }
+          }
+
+          if (chatId && reply) {
+            try {
+              await prisma.message.create({
+                data: { chatId, role: "assistant", content: reply },
+              });
+            } catch (error) {
+              console.error("Chat API could not persist the assistant reply:", error);
+            }
           }
         } catch (error) {
           if (!req.signal?.aborted) {
