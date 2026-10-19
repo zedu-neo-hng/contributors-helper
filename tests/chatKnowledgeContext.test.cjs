@@ -291,6 +291,29 @@ test('POST still rejects unauthenticated requests before touching the knowledge 
   }
 });
 
+test('POST trims long histories instead of rejecting them', async () => {
+  const h = harness();
+
+  try {
+    const history = Array.from({ length: 60 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `message ${i}`,
+    }));
+
+    const response = await h.post(history);
+
+    assert.equal(response.status, 200);
+
+    const sent = h.calls[0].messages;
+    assert.equal(sent.length, 31, 'system prompt plus the last 30 messages');
+    assert.equal(sent[0].role, 'system');
+    assert.equal(sent[1].content, 'message 30', 'older messages are dropped from the front');
+    assert.equal(sent[30].content, 'message 59', 'the newest message is kept');
+  } finally {
+    h.restore();
+  }
+});
+
 test('POST still rejects malformed bodies', async () => {
   const h = harness();
 

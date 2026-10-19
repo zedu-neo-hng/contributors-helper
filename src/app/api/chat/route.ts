@@ -346,9 +346,9 @@ export async function POST(req: Request) {
         typeof message.content === "string",
     );
 
-    if (!validMessages || messages.length > 50) {
+    if (!validMessages) {
       return NextResponse.json(
-        { error: "Invalid messages or too many messages." },
+        { error: "Invalid messages." },
         { status: 400 },
       );
     }
@@ -377,6 +377,9 @@ export async function POST(req: Request) {
     }
 
     const systemPrompt = buildSystemPrompt(knowledgeContext);
+
+    // Restored history makes requests grow without bound; the model only needs the recent tail.
+    const recentMessages = messages.slice(-30);
 
     // Persistence is best-effort: a database outage must never block a reply.
     let chatId: string | null = null;
@@ -415,7 +418,10 @@ export async function POST(req: Request) {
       completion = await openRouter.chat.completions.create(
         {
           model: "deepseek/deepseek-v4-flash-0731",
-          messages: [{ role: "system", content: systemPrompt }, ...messages],
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...recentMessages,
+          ],
           stream: true,
         },
         { signal: req.signal },
