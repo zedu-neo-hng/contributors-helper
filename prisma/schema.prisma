@@ -8,8 +8,7 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  sessionId String   @unique
+  id        String   @id
   createdAt DateTime @default(now())
   chats     Chat[]
 }
