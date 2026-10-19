@@ -23,13 +23,22 @@ function harness(clipboard) {
       return slots[index] ||= { current: initial };
     },
     useEffect(effect) {
-      // Run only the copy cleanup effect; session network loading is out of scope.
-      if (!mounted && !cleanups.length) cleanups.push(effect());
+      // Run effects like React would; capture only the first returned cleanup (the
+      // copy effect). Later cleanups, such as the chat-history fetch, are out of scope.
+      const cleanup = effect();
+      if (!mounted && typeof cleanup === 'function' && !cleanups.length) {
+        cleanups.push(cleanup);
+      }
     },
   };
   const jsx = (type, props) => ({ type, props });
   const context = {
     exports: {}, navigator: { clipboard },
+    crypto: { randomUUID: () => 'synthetic-session-id' },
+    fetch: () => {
+      const pending = { then: () => pending, catch: () => pending };
+      return pending;
+    },
     setTimeout(fn) { const id = {}; timers.set(id, fn); return id; },
     clearTimeout(id) { timers.delete(id); },
     require(name) {
@@ -64,7 +73,7 @@ function harness(clipboard) {
   return {
     render, timers, unmount: () => cleanups.forEach(fn => fn()),
     messages: value => { slots[1] = value; },
-    get feedback() { return slots[5]; },
+    get feedback() { return slots[7]; },
   };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
