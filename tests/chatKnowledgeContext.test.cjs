@@ -1,6 +1,7 @@
-// Route-level checks for knowledge injection into the chat system prompt (issue #36). The chat route
-// is transpiled and run with the network, session and AI client stubbed, but the real knowledge
-// loader, so the assertions cover the actual wiring inside POST. Run with `node --test tests/`.
+// Route-level checks for knowledge injection into the chat system prompt (issue #36) and the
+// per-user persistence wiring (neo-005). The routes are transpiled and run with the network,
+// session, AI client and database stubbed, but the real knowledge loader, so the assertions cover
+// the actual wiring inside the handlers. Run with `node --test tests/`.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,6 +21,7 @@ function transpile(file) {
 }
 
 const routeSource = transpile('src/app/api/chat/route.ts');
+const historySource = transpile('src/app/api/chat/history/route.ts');
 const knowledgeSource = transpile('src/lib/knowledge.ts');
 
 // Evaluates the knowledge module with KNOWLEDGE_DIR applied at load time, since the module resolves
@@ -38,9 +40,72 @@ function loadKnowledge(knowledgeDir) {
   }
 }
 
-function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA' } } } = {}) {
+function nextServerStub() {
+  return {
+    __esModule: true,
+    NextResponse: {
+      // The JSON round-trip re-creates bodies in the test realm, so deepStrictEqual sees plain
+      // test-side objects instead of cross-realm ones built inside the vm.
+      json: (body, init) => ({
+        body: JSON.parse(JSON.stringify(body ?? null)),
+        status: init?.status ?? 200,
+      }),
+    },
+  };
+}
+
+// Reads the SSE body to completion, which also guarantees the route has finished saving the
+// assistant reply, since it closes the stream only after that write.
+async function sse(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+
+  return text
+    .split('\n')
+    .filter(line => line.startsWith('data: '))
+    .map(line => JSON.parse(line.slice('data: '.length)));
+}
+
+function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA', id: 'synthetic-google-id' } }, throwOn } = {}) {
   const calls = [];
+  const errors = [];
+  const db = { upserts: [], chatsCreated: 0, messages: [] };
   const knowledge = loadKnowledge(knowledgeDir);
+
+  const die = role => {
+    if (throwOn === role) throw new Error('database down');
+  };
+
+  const prisma = {
+    user: {
+      upsert: async args => {
+        die('upsert');
+        db.upserts.push(JSON.parse(JSON.stringify(args)));
+        return { id: args.where.id };
+      },
+    },
+    chat: {
+      findFirst: async () => null,
+      create: async () => {
+        db.chatsCreated += 1;
+        return { id: 'chat-1' };
+      },
+    },
+    message: {
+      create: async args => {
+        die(args.data.role);
+        db.messages.push(JSON.parse(JSON.stringify(args.data)));
+        return { id: `msg-${db.messages.length}` };
+      },
+    },
+  };
 
   class OpenAIMock {
     constructor() {
@@ -61,19 +126,18 @@ function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA' } } } 
   const context = {
     exports: {},
     process,
-    console,
+    console: {
+      error: (...args) => errors.push(args.map(String).join(' ')),
+      warn() {},
+      log() {},
+    },
     // Web globals the streaming route uses to build its SSE response.
     TextEncoder,
     ReadableStream,
     Response,
     require(name) {
       if (name === 'next/server') {
-        return {
-          __esModule: true,
-          NextResponse: {
-            json: (body, init) => ({ body, status: init?.status ?? 200 }),
-          },
-        };
+        return nextServerStub();
       }
       if (name === 'next-auth') {
         return { __esModule: true, getServerSession: async () => session };
@@ -86,6 +150,9 @@ function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA' } } } 
       }
       if (name === '@/lib/knowledge') {
         return knowledge;
+      }
+      if (name === '@/lib/prisma') {
+        return { __esModule: true, prisma };
       }
       return require(name);
     },
@@ -102,9 +169,37 @@ function harness({ knowledgeDir, session = { user: { name: 'Synthetic QA' } } } 
 
   return {
     calls,
+    db,
+    errors,
     restore,
     post: messages => context.exports.POST({ json: async () => ({ messages }) }),
   };
+}
+
+function historyHarness({ session = { user: { id: 'synthetic-google-id' } }, prisma } = {}) {
+  const context = {
+    exports: {},
+    process,
+    console,
+    require(name) {
+      if (name === 'next/server') {
+        return nextServerStub();
+      }
+      if (name === 'next-auth') {
+        return { __esModule: true, getServerSession: async () => session };
+      }
+      if (name === '@/lib/auth') {
+        return { __esModule: true, authOptions: {} };
+      }
+      if (name === '@/lib/prisma') {
+        return { __esModule: true, prisma };
+      }
+      return require(name);
+    },
+  };
+
+  vm.runInNewContext(historySource, context);
+  return context.exports;
 }
 
 const systemContentOf = payload => payload.messages[0].content;
@@ -207,4 +302,148 @@ test('POST still rejects malformed bodies', async () => {
   } finally {
     h.restore();
   }
+});
+
+test('POST saves the user message and the finished assistant reply', async () => {
+  const h = harness();
+
+  try {
+    const payloads = await sse(await h.post([{ role: 'user', content: 'hello there' }]));
+
+    assert.deepEqual(payloads, [{ delta: 'stub reply' }]);
+
+    assert.deepEqual(h.db.upserts, [
+      { where: { id: 'synthetic-google-id' }, update: {}, create: { id: 'synthetic-google-id' } },
+    ]);
+    assert.equal(h.db.chatsCreated, 1);
+    assert.deepEqual(h.db.messages, [
+      { chatId: 'chat-1', role: 'user', content: 'hello there' },
+      { chatId: 'chat-1', role: 'assistant', content: 'stub reply' },
+    ]);
+    assert.deepEqual(h.errors, []);
+  } finally {
+    h.restore();
+  }
+});
+
+test('POST streams through a database outage without persisting', async () => {
+  const h = harness({ throwOn: 'upsert' });
+
+  try {
+    const payloads = await sse(await h.post([{ role: 'user', content: 'hello there' }]));
+
+    assert.deepEqual(payloads, [{ delta: 'stub reply' }], 'the reply must still stream');
+    assert.deepEqual(h.db.messages, [], 'nothing may be half-saved during an outage');
+    assert.ok(
+      h.errors.some(text => text.includes('persist the user message')),
+      'the outage must be logged, not swallowed',
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test('POST streams through an assistant-save failure after a full reply', async () => {
+  const h = harness({ throwOn: 'assistant' });
+
+  try {
+    const payloads = await sse(await h.post([{ role: 'user', content: 'hello there' }]));
+
+    assert.deepEqual(payloads, [{ delta: 'stub reply' }]);
+    assert.deepEqual(
+      h.db.messages.map(m => m.role),
+      ['user'],
+      'the user message is saved, the failed assistant reply is not',
+    );
+    assert.ok(
+      h.errors.some(text => text.includes('persist the assistant reply')),
+      'the save failure must be logged, not swallowed',
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test('history returns the signed-in user\'s saved conversation in order', async () => {
+  const saved = [
+    { role: 'user', content: 'first question' },
+    { role: 'assistant', content: 'first answer' },
+  ];
+  const lookups = [];
+  let messageQuery;
+  const prisma = {
+    chat: {
+      findFirst: async args => {
+        lookups.push(JSON.parse(JSON.stringify(args)));
+        return { id: 'chat-1' };
+      },
+    },
+    message: {
+      findMany: async args => {
+        messageQuery = JSON.parse(JSON.stringify(args));
+        return saved;
+      },
+    },
+  };
+
+  const { GET } = historyHarness({ prisma });
+  const response = await GET();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(lookups, [
+    { where: { userId: 'synthetic-google-id' }, orderBy: { createdAt: 'asc' } },
+  ]);
+  assert.deepEqual(messageQuery, {
+    where: { chatId: 'chat-1' },
+    orderBy: { createdAt: 'asc' },
+    select: { role: true, content: true },
+  });
+  assert.deepEqual(response.body.messages, saved);
+});
+
+test('history returns an empty list without touching the database when unauthenticated', async () => {
+  let touched = false;
+  const prisma = {
+    chat: {
+      findFirst: async () => {
+        touched = true;
+        return { id: 'chat-1' };
+      },
+    },
+    message: { findMany: async () => [] },
+  };
+
+  const { GET } = historyHarness({ session: null, prisma });
+  const response = await GET();
+
+  assert.deepEqual(response.body, { messages: [] });
+  assert.equal(touched, false, 'the database must not be queried without a session');
+});
+
+test('history returns an empty list before the user has any chat', async () => {
+  const prisma = {
+    chat: { findFirst: async () => null },
+    message: { findMany: async () => [] },
+  };
+
+  const { GET } = historyHarness({ prisma });
+  const response = await GET();
+
+  assert.deepEqual(response.body, { messages: [] });
+});
+
+test('history returns an empty list when the database is unavailable', async () => {
+  const prisma = {
+    chat: {
+      findFirst: async () => {
+        throw new Error('database down');
+      },
+    },
+    message: { findMany: async () => [] },
+  };
+
+  const { GET } = historyHarness({ prisma });
+  const response = await GET();
+
+  assert.deepEqual(response.body, { messages: [] });
 });
