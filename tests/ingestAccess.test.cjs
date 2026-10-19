@@ -1,5 +1,5 @@
-// The upload/ingest gate: either a correctly signed-in ADMIN+ session, or the shared
-// secret for scripted runs. Role lookups are stubbed; the real gate module runs.
+// The upload/ingest gate: a signed-in ADMIN+ session is the only way in. Role lookups are
+// stubbed; the real gate module runs.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -37,20 +37,7 @@ function loadAccess({ session = null, user = null } = {}) {
 
 // Values built inside the vm realm fail deepStrictEqual against host literals.
 const plain = value => JSON.parse(JSON.stringify(value ?? null));
-const request = header => ({ headers: { get: name => (name === 'x-ingest-secret' ? header ?? null : null) } });
 const session = id => ({ user: { id, email: `${id}@example.com` } });
-
-async function withSecret(secret, run) {
-  const previous = process.env.INGEST_SECRET;
-  if (secret === undefined) delete process.env.INGEST_SECRET;
-  else process.env.INGEST_SECRET = secret;
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) delete process.env.INGEST_SECRET;
-    else process.env.INGEST_SECRET = previous;
-  }
-}
 
 test('currentViewer returns null without a signed-in session', async () => {
   const access = loadAccess({ session: null });
@@ -70,52 +57,42 @@ test('currentViewer fails closed for a missing row or an unknown stored role', a
   assert.deepEqual(plain(await unknown.currentViewer()), { id: 'google-3', email: 'google-3@example.com', role: 'USER' });
 });
 
-test('a matching shared secret is accepted without a session', async () => {
-  const access = loadAccess({ session: null });
-  await withSecret('s3cret', async () => {
-    assert.deepEqual(plain(await access.hasIngestAccess(request('s3cret'))), { ok: true, via: 'secret', viewer: null });
-  });
-});
-
-test('a wrong or absent secret falls through to the session', async () => {
-  const access = loadAccess({ session: null });
-  await withSecret('s3cret', async () => {
-    assert.deepEqual(plain(await access.hasIngestAccess(request('wrong'))), { ok: false, viewer: null });
-    assert.deepEqual(plain(await access.hasIngestAccess(request())), { ok: false, viewer: null });
-  });
-});
-
-test('an unset secret is never treated as a match', async () => {
-  const access = loadAccess({ session: null });
-  await withSecret(undefined, async () => {
-    assert.deepEqual(plain(await access.hasIngestAccess(request(''))), { ok: false, viewer: null });
-    assert.deepEqual(plain(await access.hasIngestAccess(request('undefined'))), { ok: false, viewer: null });
-  });
-});
-
 test('admins pass the default gate, ordinary contributors do not', async () => {
-  await withSecret('s3cret', async () => {
-    const admin = loadAccess({ session: session('admin-1'), user: { id: 'admin-1', email: null, role: 'ADMIN' } });
-    const user = loadAccess({ session: session('user-1'), user: { id: 'user-1', email: null, role: 'USER' } });
+  const admin = loadAccess({ session: session('admin-1'), user: { id: 'admin-1', email: null, role: 'ADMIN' } });
+  const user = loadAccess({ session: session('user-1'), user: { id: 'user-1', email: null, role: 'USER' } });
 
-    const allowed = await admin.hasIngestAccess(request());
-    assert.equal(allowed.ok, true);
-    assert.equal(allowed.via, 'session');
-    assert.equal(allowed.viewer.role, 'ADMIN');
+  const allowed = await admin.hasIngestAccess();
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.viewer.role, 'ADMIN');
 
-    const denied = await user.hasIngestAccess(request());
-    assert.equal(denied.ok, false);
-    // The viewer is returned so the route can answer 403 instead of 401.
-    assert.equal(denied.viewer.role, 'USER');
-  });
+  const denied = await user.hasIngestAccess();
+  assert.equal(denied.ok, false);
+  // The viewer is returned so the route can answer 403 instead of 401.
+  assert.equal(denied.viewer.role, 'USER');
+});
+
+test('an anonymous request is refused with no viewer so the route answers 401', async () => {
+  const access = loadAccess({ session: null });
+
+  const denied = await access.hasIngestAccess();
+
+  assert.equal(denied.ok, false);
+  assert.equal(denied.viewer, null);
 });
 
 test('a stricter minimum keeps admins out and lets super admins through', async () => {
-  await withSecret('s3cret', async () => {
-    const admin = loadAccess({ session: session('admin-2'), user: { id: 'admin-2', email: null, role: 'ADMIN' } });
-    const superAdmin = loadAccess({ session: session('super-1'), user: { id: 'super-1', email: null, role: 'SUPER_ADMIN' } });
+  const admin = loadAccess({ session: session('admin-2'), user: { id: 'admin-2', email: null, role: 'ADMIN' } });
+  const superAdmin = loadAccess({ session: session('super-1'), user: { id: 'super-1', email: null, role: 'SUPER_ADMIN' } });
 
-    assert.equal((await admin.hasIngestAccess(request(), 'SUPER_ADMIN')).ok, false);
-    assert.equal((await superAdmin.hasIngestAccess(request(), 'SUPER_ADMIN')).ok, true);
-  });
+  assert.equal((await admin.hasIngestAccess('SUPER_ADMIN')).ok, false);
+  assert.equal((await superAdmin.hasIngestAccess('SUPER_ADMIN')).ok, true);
+});
+
+// Regression guard: a shared secret used to be a second way in. It must stay gone, so the
+// session is the only path and there is nothing extra to rotate or leak.
+test('the gate has no shared-secret path', () => {
+  const source = fs.readFileSync('src/lib/ingestAccess.ts', 'utf8');
+
+  assert.ok(!source.includes('INGEST_SECRET'), 'an INGEST_SECRET fallback would be a second way in');
+  assert.ok(!source.includes('x-ingest-secret'), 'the secret header must not be accepted');
 });

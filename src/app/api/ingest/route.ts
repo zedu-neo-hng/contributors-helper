@@ -58,9 +58,9 @@ function parseTarget(body: unknown): Target | null {
 
 export async function POST(req: Request) {
   try {
-    // A super admin triggers this from the UI with a session cookie; scripted runs keep
-    // using the shared secret header.
-    const access = await hasIngestAccess(req);
+    // A super admin triggers this from the UI with a session cookie. There is no
+    // shared-secret path in.
+    const access = await hasIngestAccess();
     if (!access.ok) {
       return NextResponse.json(
         { error: access.viewer ? "Admin access required." : "Unauthorized." },

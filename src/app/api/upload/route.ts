@@ -9,9 +9,8 @@ const ALLOWED = new Set([".pdf", ".md", ".txt"]);
 
 export async function POST(req: Request) {
   try {
-    // Admins upload from the UI with their session cookie; scripted callers keep using
-    // the shared secret, so the same route serves both without an operator-only gate.
-    const access = await hasIngestAccess(req);
+    // Admins upload from the UI with their session cookie. There is no shared-secret path in.
+    const access = await hasIngestAccess();
     if (!access.ok) {
       return NextResponse.json(
         { error: access.viewer ? "Admin access required." : "Unauthorized." },
@@ -36,14 +35,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing or empty 'file' field." }, { status: 400 });
     }
 
-    let uploaderId = access.viewer?.id ?? "anonymous";
-    const rawUploader = form.get("uploaderId");
-    if (rawUploader !== null) {
-      if (typeof rawUploader !== "string" || rawUploader.length < 1 || rawUploader.length > 100) {
-        return NextResponse.json({ error: "uploaderId must be 1 to 100 chars." }, { status: 400 });
-      }
-      uploaderId = rawUploader;
-    }
+    // The uploader is whoever is signed in; a form field cannot claim to be someone else.
+    const uploaderId = access.viewer.id;
 
     const originalName = file.name || "upload";
     const dot = originalName.lastIndexOf(".");

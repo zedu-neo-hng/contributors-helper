@@ -36,6 +36,9 @@ export function isKnowledgeBaseError(error: unknown): error is KnowledgeBaseErro
   );
 }
 
+// The corpus ships in the repository and the image, so this needs no environment variable in
+// production. KNOWLEDGE_DIR exists as an in-process override for tests (and for an out-of-tree
+// corpus during local work); it is deliberately not part of .env.example.
 export const KNOWLEDGE_DIR =
   process.env.KNOWLEDGE_DIR || path.join(process.cwd(), "clean-transcripts");
 export const SUMMARIES_DIR = path.join(KNOWLEDGE_DIR, "summaries");

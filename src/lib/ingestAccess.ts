@@ -31,23 +31,18 @@ export async function currentViewer(): Promise<Viewer | null> {
   };
 }
 
-export type IngestAccess =
-  | { ok: true; via: "secret"; viewer: null }
-  | { ok: true; via: "session"; viewer: Viewer }
-  | { ok: false; viewer: Viewer | null };
+export type IngestAccess = { ok: true; viewer: Viewer } | { ok: false; viewer: Viewer | null };
 
-// Upload/ingest are reachable two ways: a correctly signed-in ADMIN+ session (the
-// in-app path), or the shared secret header (scripted/cron runs outside a browser).
-// `minimum` defaults to ADMIN; SUPER_ADMIN is a stricter caller of the same helper.
-export async function hasIngestAccess(req: Request, minimum: UserRole = "ADMIN"): Promise<IngestAccess> {
-  const secret = process.env.INGEST_SECRET;
-  if (secret && req.headers.get("x-ingest-secret") === secret) {
-    return { ok: true, via: "secret", viewer: null };
-  }
-
+// Upload and ingest are reachable only from a signed-in ADMIN+ session. There is
+// deliberately no shared-secret header: a second, weaker way in would undo the point of
+// gating the pipeline, and nothing needs unattended access (the committed transcript corpus
+// is read from disk, not ingested). `minimum` defaults to ADMIN; SUPER_ADMIN is a stricter
+// caller of the same helper.
+export async function hasIngestAccess(minimum: UserRole = "ADMIN"): Promise<IngestAccess> {
   const viewer = await currentViewer();
+
   if (viewer && roleAtLeast(viewer.role, minimum)) {
-    return { ok: true, via: "session", viewer };
+    return { ok: true, viewer };
   }
 
   return { ok: false, viewer };

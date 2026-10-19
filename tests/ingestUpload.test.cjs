@@ -96,7 +96,7 @@ class OpenAIMock {
   }
 }
 
-function makeContext({ prisma, openai, secret, log, access }) {
+function makeContext({ prisma, openai, log, access }) {
   return {
     exports: {},
     console: { error: (...args) => console.error('[route]', ...args), log() {}, warn() {} },
@@ -119,18 +119,12 @@ function makeContext({ prisma, openai, secret, log, access }) {
       }
       if (name === '@/lib/ingestAccess') {
         // The gate itself is covered by tests/ingestAccess.test.cjs; here it stands in for
-        // the session lookup so these tests stay focused on upload/ingest behaviour.
+        // the session lookup so these tests stay focused on upload/ingest behaviour. The
+        // default is a signed-in admin, which is the only way in.
         return {
           __esModule: true,
           hasIngestAccess:
-            access ??
-            (async (req) => {
-              const configured = process.env.INGEST_SECRET;
-              if (configured && req.headers.get('x-ingest-secret') === configured) {
-                return { ok: true, via: 'secret', viewer: null };
-              }
-              return { ok: false, viewer: null };
-            }),
+            access ?? (async () => ({ ok: true, viewer: { id: 'google-1', email: null, role: 'ADMIN' } })),
         };
       }
       if (name === '@/lib/prisma') return { __esModule: true, prisma };
@@ -158,34 +152,25 @@ function runRoute(routeFile, context) {
   return context.exports;
 }
 
-function uploadRequest({ file, uploaderId, secretHeader, contentLength }) {
+function uploadRequest({ file, uploaderId, contentLength }) {
   return {
-    headers: { get: name => (name === 'x-ingest-secret' ? secretHeader : name === 'content-length' ? contentLength : null) },
+    headers: { get: name => (name === 'content-length' ? contentLength : null) },
     formData: async () => ({
       get: name => (name === 'file' ? file : uploaderId === undefined ? null : uploaderId),
     }),
   };
 }
 
-test('upload rejects anonymous callers whether or not a secret is configured', async () => {
+test('upload rejects anonymous callers', async () => {
   const { prisma } = prismaStub();
-  const context = makeContext({ prisma, openai: new OpenAIMock(''), secret: 's3cret' });
+  const access = async () => ({ ok: false, viewer: null });
+  const context = makeContext({ prisma, openai: new OpenAIMock(''), access });
   const { POST } = runRoute('src/app/api/upload/route.ts', context);
 
-  const previous = process.env.INGEST_SECRET;
-  delete process.env.INGEST_SECRET;
-  const unconfigured = await POST(uploadRequest({ file: null }));
-  process.env.INGEST_SECRET = 's3cret';
+  const unauthorized = await POST(uploadRequest({ file: null }));
 
-  const unauthorized = await POST(uploadRequest({ file: null, secretHeader: 'wrong' }));
-
-  try {
-    assert.equal(unconfigured.status, 401);
-    assert.equal(unauthorized.status, 401);
-  } finally {
-    if (previous === undefined) delete process.env.INGEST_SECRET;
-    else process.env.INGEST_SECRET = previous;
-  }
+  assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.body.error, 'Unauthorized.');
 });
 
 test('a signed-in contributor without admin rights is forbidden, not unauthorized', async () => {
@@ -216,53 +201,56 @@ test('an admin session stages the upload under the signed-in id', async () => {
 
 test('upload validates and stages the file bytes in the database', async () => {
   const { prisma, log } = prismaStub();
-  const context = makeContext({ prisma, openai: new OpenAIMock(''), secret: 's3cret' });
+  const access = async () => ({ ok: true, viewer: { id: 'google-1', email: null, role: 'ADMIN' } });
+  const context = makeContext({ prisma, openai: new OpenAIMock(''), access });
   const { POST } = runRoute('src/app/api/upload/route.ts', context);
 
-  const previous = process.env.INGEST_SECRET;
-  process.env.INGEST_SECRET = 's3cret';
-  try {
-    const bytes = new TextEncoder().encode('verbatim transcript text');
-    const good = new File([bytes], '2026-10-19_call_10.txt');
+  const bytes = new TextEncoder().encode('verbatim transcript text');
+  const good = new File([bytes], '2026-10-19_call_10.txt');
 
-    const staged = await POST(uploadRequest({ file: good, uploaderId: 'tri', secretHeader: 's3cret', contentLength: String(bytes.length) }));
-    const badExt = await POST(uploadRequest({ file: new File([bytes], 'thing.exe'), secretHeader: 's3cret' }));
-    const fakePdf = await POST(uploadRequest({ file: new File([bytes], 'thing.pdf'), secretHeader: 's3cret' }));
+  const staged = await POST(uploadRequest({ file: good, contentLength: String(bytes.length) }));
+  const badExt = await POST(uploadRequest({ file: new File([bytes], 'thing.exe') }));
+  const fakePdf = await POST(uploadRequest({ file: new File([bytes], 'thing.pdf') }));
 
-    assert.equal(staged.status, 200);
-    assert.equal(staged.body.originalName, '2026-10-19_call_10.txt');
-    assert.equal(staged.body.status, 'STAGED');
-    assert.equal(staged.body.uploadedAt, '2026-10-19T12:00:00.000Z');
-    assert.equal(log.creates.length, 1);
-    assert.equal(log.creates[0].data.ext, '.txt');
-    assert.equal(log.creates[0].data.uploaderId, 'tri');
-    assert.equal(log.creates[0].data.data, '<24 bytes>');
-    assert.equal(badExt.status, 400);
-    assert.equal(fakePdf.status, 400);
-  } finally {
-    if (previous === undefined) delete process.env.INGEST_SECRET;
-    else process.env.INGEST_SECRET = previous;
-  }
+  assert.equal(staged.status, 200);
+  assert.equal(staged.body.originalName, '2026-10-19_call_10.txt');
+  assert.equal(staged.body.status, 'STAGED');
+  assert.equal(staged.body.uploadedAt, '2026-10-19T12:00:00.000Z');
+  assert.equal(log.creates.length, 1);
+  assert.equal(log.creates[0].data.ext, '.txt');
+  assert.equal(log.creates[0].data.uploaderId, 'google-1', 'the signed-in admin is the uploader');
+  assert.equal(log.creates[0].data.data, '<24 bytes>');
+  assert.equal(badExt.status, 400);
+  assert.equal(fakePdf.status, 400);
+});
+
+test('a form field cannot attribute the upload to someone else', async () => {
+  const { prisma, log } = prismaStub();
+  const access = async () => ({ ok: true, viewer: { id: 'google-1', email: null, role: 'ADMIN' } });
+  const context = makeContext({ prisma, openai: new OpenAIMock(''), access });
+  const { POST } = runRoute('src/app/api/upload/route.ts', context);
+
+  const bytes = new TextEncoder().encode('transcript text');
+  const staged = await POST(uploadRequest({ file: new File([bytes], 'call.md'), uploaderId: 'someone-else' }));
+
+  assert.equal(staged.status, 200);
+  assert.equal(log.creates[0].data.uploaderId, 'google-1', 'the session id always wins');
 });
 
 function ingestHarness({ stagedDocs = [], reply = SECTIONED_SUMMARY } = {}) {
   const { prisma, log } = prismaStub({ stagedDocs });
   const openai = new OpenAIMock(reply);
-  const context = makeContext({ prisma, openai, secret: 's3cret', log });
+  const context = makeContext({ prisma, openai, log });
   const { POST } = runRoute('src/app/api/ingest/route.ts', context);
 
-  const previousSecret = process.env.INGEST_SECRET;
   const previousKey = process.env.AI_API_KEY;
-  process.env.INGEST_SECRET = 's3cret';
   process.env.AI_API_KEY = 'test-key';
 
   return {
     log,
     openai,
-    post: body => POST({ headers: { get: () => 's3cret' }, json: async () => body }),
+    post: body => POST({ json: async () => body }),
     restore: () => {
-      if (previousSecret === undefined) delete process.env.INGEST_SECRET;
-      else process.env.INGEST_SECRET = previousSecret;
       if (previousKey === undefined) delete process.env.AI_API_KEY;
       else process.env.AI_API_KEY = previousKey;
     },
