@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { hasIngestAccess } from "@/lib/ingestAccess";
 
 export const dynamic = "force-dynamic";
 
@@ -8,13 +9,14 @@ const ALLOWED = new Set([".pdf", ".md", ".txt"]);
 
 export async function POST(req: Request) {
   try {
-    // Upload is operator tooling with no UI, so it is gated by the same shared secret as ingest.
-    const secret = process.env.INGEST_SECRET;
-    if (!secret) {
-      return NextResponse.json({ error: "Upload is not configured." }, { status: 503 });
-    }
-    if (req.headers.get("x-ingest-secret") !== secret) {
-      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    // Admins upload from the UI with their session cookie; scripted callers keep using
+    // the shared secret, so the same route serves both without an operator-only gate.
+    const access = await hasIngestAccess(req);
+    if (!access.ok) {
+      return NextResponse.json(
+        { error: access.viewer ? "Admin access required." : "Unauthorized." },
+        { status: access.viewer ? 403 : 401 },
+      );
     }
 
     const contentLength = Number(req.headers.get("content-length"));
@@ -34,7 +36,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing or empty 'file' field." }, { status: 400 });
     }
 
-    let uploaderId = "anonymous";
+    let uploaderId = access.viewer?.id ?? "anonymous";
     const rawUploader = form.get("uploaderId");
     if (rawUploader !== null) {
       if (typeof rawUploader !== "string" || rawUploader.length < 1 || rawUploader.length > 100) {

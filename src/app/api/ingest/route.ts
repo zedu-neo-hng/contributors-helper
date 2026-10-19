@@ -4,6 +4,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 import { cleanTranscriptText } from "@/lib/cleanText";
 import { resetKnowledgeCache } from "@/lib/knowledge";
 import { prisma } from "@/lib/prisma";
+import { hasIngestAccess } from "@/lib/ingestAccess";
 import {
   SUMMARIZE_MODEL,
   buildSummarizePrompt,
@@ -27,12 +28,14 @@ function stageError(stage: string, e: unknown): string {
 
 export async function POST(req: Request) {
   try {
-    const secret = process.env.INGEST_SECRET;
-    if (!secret) {
-      return NextResponse.json({ error: "Ingest is not configured." }, { status: 503 });
-    }
-    if (req.headers.get("x-ingest-secret") !== secret) {
-      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    // A super admin triggers this from the UI with a session cookie; scripted runs keep
+    // using the shared secret header.
+    const access = await hasIngestAccess(req);
+    if (!access.ok) {
+      return NextResponse.json(
+        { error: access.viewer ? "Admin access required." : "Unauthorized." },
+        { status: access.viewer ? 403 : 401 },
+      );
     }
     if (!process.env.AI_API_KEY) {
       return NextResponse.json({ error: "AI is not configured." }, { status: 503 });

@@ -82,7 +82,7 @@ class OpenAIMock {
   }
 }
 
-function makeContext({ prisma, openai, secret, log }) {
+function makeContext({ prisma, openai, secret, log, access }) {
   return {
     exports: {},
     console: { error: (...args) => console.error('[route]', ...args), log() {}, warn() {} },
@@ -101,6 +101,22 @@ function makeContext({ prisma, openai, secret, log }) {
               status: init?.status ?? 200,
             }),
           },
+        };
+      }
+      if (name === '@/lib/ingestAccess') {
+        // The gate itself is covered by tests/ingestAccess.test.cjs; here it stands in for
+        // the session lookup so these tests stay focused on upload/ingest behaviour.
+        return {
+          __esModule: true,
+          hasIngestAccess:
+            access ??
+            (async (req) => {
+              const configured = process.env.INGEST_SECRET;
+              if (configured && req.headers.get('x-ingest-secret') === configured) {
+                return { ok: true, via: 'secret', viewer: null };
+              }
+              return { ok: false, viewer: null };
+            }),
         };
       }
       if (name === '@/lib/prisma') return { __esModule: true, prisma };
@@ -137,7 +153,7 @@ function uploadRequest({ file, uploaderId, secretHeader, contentLength }) {
   };
 }
 
-test('upload rejects without or with a wrong secret', async () => {
+test('upload rejects anonymous callers whether or not a secret is configured', async () => {
   const { prisma } = prismaStub();
   const context = makeContext({ prisma, openai: new OpenAIMock(''), secret: 's3cret' });
   const { POST } = runRoute('src/app/api/upload/route.ts', context);
@@ -150,12 +166,38 @@ test('upload rejects without or with a wrong secret', async () => {
   const unauthorized = await POST(uploadRequest({ file: null, secretHeader: 'wrong' }));
 
   try {
-    assert.equal(unconfigured.status, 503);
+    assert.equal(unconfigured.status, 401);
     assert.equal(unauthorized.status, 401);
   } finally {
     if (previous === undefined) delete process.env.INGEST_SECRET;
     else process.env.INGEST_SECRET = previous;
   }
+});
+
+test('a signed-in contributor without admin rights is forbidden, not unauthorized', async () => {
+  const { prisma } = prismaStub();
+  const access = async () => ({ ok: false, viewer: { id: 'google-9', email: null, role: 'USER' } });
+  const context = makeContext({ prisma, openai: new OpenAIMock(''), access });
+  const { POST } = runRoute('src/app/api/upload/route.ts', context);
+
+  const forbidden = await POST(uploadRequest({ file: null }));
+
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.body.error, 'Admin access required.');
+});
+
+test('an admin session stages the upload under the signed-in id', async () => {
+  const { prisma, log } = prismaStub();
+  const access = async () => ({ ok: true, via: 'session', viewer: { id: 'google-1', email: null, role: 'ADMIN' } });
+  const context = makeContext({ prisma, openai: new OpenAIMock(''), access });
+  const { POST } = runRoute('src/app/api/upload/route.ts', context);
+
+  const bytes = new TextEncoder().encode('transcript text');
+  const staged = await POST(uploadRequest({ file: new File([bytes], '2026-10-19_call_10.md') }));
+
+  assert.equal(staged.status, 200);
+  assert.equal(staged.body.uploaderId, 'google-1');
+  assert.equal(log.creates[0].data.uploaderId, 'google-1');
 });
 
 test('upload validates and stages the file bytes in the database', async () => {
