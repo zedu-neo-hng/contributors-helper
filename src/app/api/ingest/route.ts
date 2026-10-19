@@ -14,6 +14,15 @@ import {
 
 export const dynamic = "force-dynamic";
 
+// Exactly one document is ingested per request. A chunked summarise run can take minutes,
+// and a request that handles a single document cannot be cut off part-way by a proxy or
+// client timeout. The caller loops until `remaining` reaches zero, passing back the ids
+// that failed so one unreadable file cannot block the rest of the queue.
+const MAX_ID_LENGTH = 200;
+const MAX_SKIPPED = 200;
+
+type Target = { id?: string; exclude: string[] };
+
 const SYSTEM_PROMPT = (documentDate: string, part: number, totalParts: number) =>
   buildSummarizePrompt(documentDate, part, totalParts);
 
@@ -24,6 +33,27 @@ function stageError(stage: string, e: unknown): string {
   if (stage === "parse") return "Could not read this PDF.";
   if (stage === "ai") return "AI service error, try again later.";
   return "Ingest failed.";
+}
+
+function isId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH;
+}
+
+// Returns null for a malformed body so the route can answer 400 rather than quietly
+// ingesting the wrong document. A missing body is normal (plain `curl -X POST`).
+function parseTarget(body: unknown): Target | null {
+  if (body === null || body === undefined) return { exclude: [] };
+  if (typeof body !== "object") return null;
+
+  const { id, exclude } = body as { id?: unknown; exclude?: unknown };
+
+  if (id !== undefined && !isId(id)) return null;
+
+  if (exclude === undefined) return { id: id as string | undefined, exclude: [] };
+  if (!Array.isArray(exclude) || exclude.length > MAX_SKIPPED) return null;
+  if (!exclude.every(isId)) return null;
+
+  return { id: id as string | undefined, exclude: exclude as string[] };
 }
 
 export async function POST(req: Request) {
@@ -37,9 +67,27 @@ export async function POST(req: Request) {
         { status: access.viewer ? 403 : 401 },
       );
     }
+
     if (!process.env.AI_API_KEY) {
       return NextResponse.json({ error: "AI is not configured." }, { status: 503 });
     }
+
+    let body: unknown = null;
+    try {
+      body = await req.json();
+    } catch {
+      body = null;
+    }
+
+    const target = parseTarget(body);
+    if (!target) {
+      return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+    }
+
+    const { id, exclude } = target;
+    const skipped = exclude.length > 0 ? { notIn: exclude } : undefined;
+    const remainingWhere = skipped ? { status: "STAGED", id: skipped } : { status: "STAGED" };
+    const targetWhere = id ? { status: "STAGED", id } : remainingWhere;
 
     const openRouter = new OpenAI({
       apiKey: process.env.AI_API_KEY,
@@ -50,14 +98,16 @@ export async function POST(req: Request) {
       },
     });
 
-    const staged = await prisma.stagedDocument.findMany({
-      where: { status: "STAGED" },
+    const [doc] = await prisma.stagedDocument.findMany({
+      where: targetWhere,
       orderBy: { uploadedAt: "asc" },
+      take: 1,
     });
+
     const processed: string[] = [];
     const failed: { id: string; error: string }[] = [];
 
-    for (const doc of staged) {
+    if (doc) {
       let stage = "read";
       try {
         const bytes = new Uint8Array(doc.data);
@@ -126,7 +176,7 @@ export async function POST(req: Request) {
     // Newly ingested summaries must reach the chat without a process restart.
     if (processed.length > 0) resetKnowledgeCache();
 
-    const remaining = await prisma.stagedDocument.count({ where: { status: "STAGED" } });
+    const remaining = await prisma.stagedDocument.count({ where: remainingWhere });
     return NextResponse.json({ processed, failed, remaining });
   } catch {
     return NextResponse.json({ error: "Ingest failed." }, { status: 500 });

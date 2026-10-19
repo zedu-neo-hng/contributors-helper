@@ -95,19 +95,40 @@ export default function IngestPanel() {
     setError('');
     setResult(null);
 
+    const processed: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+
     try {
-      const response = await fetch('/api/ingest', { method: 'POST' });
-      const data = await response.json().catch(() => null);
+      // The route ingests one document per request, so a long PDF cannot time out a single
+      // call. Documents that fail are handed back as `exclude` for the rest of the run, so
+      // one unreadable file cannot block the queue. The loop is bounded for safety.
+      const skipped: string[] = [];
 
-      if (!response.ok) {
-        throw new Error(data?.error || `Ingest failed (${response.status}).`);
+      for (let attempt = 0; attempt < 500; attempt++) {
+        const response = await fetch('/api/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ exclude: skipped }),
+        });
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          throw new Error(data?.error || `Ingest failed (${response.status}).`);
+        }
+
+        const done = Array.isArray(data?.processed) ? data.processed : [];
+        const problems = Array.isArray(data?.failed) ? data.failed : [];
+        const remaining = typeof data?.remaining === 'number' ? data.remaining : 0;
+
+        processed.push(...done);
+        failed.push(...problems);
+        skipped.push(...problems.map((problem: { id: string }) => problem.id));
+
+        setResult({ processed: [...processed], failed: [...failed], remaining });
+
+        // Nothing staged (or nothing left to try) means the run is finished.
+        if (remaining <= 0 || done.length + problems.length === 0) break;
       }
-
-      setResult({
-        processed: Array.isArray(data?.processed) ? data.processed : [],
-        failed: Array.isArray(data?.failed) ? data.failed : [],
-        remaining: typeof data?.remaining === 'number' ? data.remaining : 0,
-      });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Ingest failed.');
     } finally {
@@ -153,9 +174,11 @@ export default function IngestPanel() {
           {running ? 'Running ingestion…' : 'Run ingest'}
         </button>
         <span role="status" aria-live="polite" style={{ fontSize: '0.85rem', color: result?.failed.length ? '#f85149' : '#8b949e' }}>
-          {result
-            ? `Processed ${result.processed.length} document(s), failed ${result.failed.length}, ${result.remaining} still staged.`
-            : ''}
+          {running
+            ? `Ingesting… ${result ? `${result.processed.length} processed, ${result.failed.length} failed.` : ''}`
+            : result
+              ? `Processed ${result.processed.length} document(s), failed ${result.failed.length}, ${result.remaining} still staged.`
+              : ''}
         </span>
       </div>
 

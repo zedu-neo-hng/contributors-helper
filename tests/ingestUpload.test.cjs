@@ -37,6 +37,15 @@ const SECTIONED_SUMMARY = [
   '## Action Items', 'Everyone submits the form.',
 ].join('\n');
 
+// Mirrors the parts of Prisma's `where` the ingest route relies on, so tests can assert on
+// which document a request picked.
+function matchesWhere(doc, where = {}) {
+  if (where.status && doc.status !== where.status) return false;
+  if (typeof where.id === 'string' && doc.id !== where.id) return false;
+  if (where.id && typeof where.id === 'object' && Array.isArray(where.id.notIn) && where.id.notIn.includes(doc.id)) return false;
+  return true;
+}
+
 function prismaStub({ stagedDocs = [] } = {}) {
   const log = { creates: [], upserts: [], updates: [], transactions: 0, knowledgeResets: 0 };
   const prisma = {
@@ -45,10 +54,15 @@ function prismaStub({ stagedDocs = [] } = {}) {
         log.creates.push(JSON.parse(JSON.stringify({ ...args, data: { ...args.data, data: `<${args.data.data.length} bytes>` } })));
         return { id: 'staged-1', ...args.data, uploadedAt: new Date('2026-10-19T12:00:00Z'), status: 'STAGED' };
       },
-      findMany: async () => stagedDocs,
-      count: async () => stagedDocs.filter(d => d.status === 'STAGED').length - log.upserts.length,
+      findMany: async (args = {}) => stagedDocs
+        .filter(doc => matchesWhere(doc, args.where))
+        .sort((a, b) => new Date(a.uploadedAt) - new Date(b.uploadedAt))
+        .slice(0, args.take ?? stagedDocs.length),
+      count: async (args = {}) => stagedDocs.filter(doc => matchesWhere(doc, args.where)).length,
       update: async args => {
         log.updates.push(JSON.parse(JSON.stringify(args)));
+        const doc = stagedDocs.find(candidate => candidate.id === args.where.id);
+        if (doc && args.data && args.data.status) doc.status = args.data.status;
         return {};
       },
     },
@@ -245,7 +259,7 @@ function ingestHarness({ stagedDocs = [], reply = SECTIONED_SUMMARY } = {}) {
   return {
     log,
     openai,
-    post: () => POST({ headers: { get: () => 's3cret' } }),
+    post: body => POST({ headers: { get: () => 's3cret' }, json: async () => body }),
     restore: () => {
       if (previousSecret === undefined) delete process.env.INGEST_SECRET;
       else process.env.INGEST_SECRET = previousSecret;
@@ -334,6 +348,82 @@ test('ingest failures keep the document staged for retry', async () => {
     assert.deepEqual(response.body.failed, [{ id: 'doc-3', error: 'No extractable text.' }]);
   } finally {
     blank.restore();
+  }
+});
+
+const stagedDoc = (id, uploadedAt, body = noisyTranscript) => ({
+  id,
+  ext: '.txt',
+  filename: `${id}.txt`,
+  status: 'STAGED',
+  data: new TextEncoder().encode(body),
+  uploadedAt: new Date(uploadedAt),
+});
+
+test('ingest handles exactly one document per request so a long run cannot time out', async () => {
+  const h = ingestHarness({
+    stagedDocs: [stagedDoc('doc-1', '2026-10-19T10:00:00Z'), stagedDoc('doc-2', '2026-10-19T11:00:00Z')],
+  });
+
+  try {
+    const first = await h.post();
+    assert.deepEqual(first.body, { processed: ['doc-1'], failed: [], remaining: 1 }, 'the oldest document goes first');
+    assert.equal(h.log.transactions, 1, 'one document per request');
+
+    const second = await h.post({ exclude: [] });
+    assert.deepEqual(second.body, { processed: ['doc-2'], failed: [], remaining: 0 });
+
+    const third = await h.post({ exclude: [] });
+    assert.deepEqual(third.body, { processed: [], failed: [], remaining: 0 }, 'an empty queue is not an error');
+    assert.equal(h.log.transactions, 2, 'the drained queue triggers no further work');
+  } finally {
+    h.restore();
+  }
+});
+
+test('a document that cannot be read is skipped so the queue still drains', async () => {
+  const h = ingestHarness({
+    stagedDocs: [stagedDoc('bad', '2026-10-19T10:00:00Z', '00:00:01 >> um'), stagedDoc('good', '2026-10-19T11:00:00Z')],
+  });
+
+  try {
+    const first = await h.post({ exclude: [] });
+    // `remaining` counts everything still staged and not given up on: the bad document is
+    // still staged (for a later retry) and the good one has not been reached yet.
+    assert.deepEqual(first.body, { processed: [], failed: [{ id: 'bad', error: 'No extractable text.' }], remaining: 2 });
+    assert.deepEqual(h.log.updates, [], 'the unreadable document must stay staged');
+
+    // The UI hands the failed id back, so the good document is still reached.
+    const second = await h.post({ exclude: ['bad'] });
+    assert.deepEqual(second.body, { processed: ['good'], failed: [], remaining: 0 });
+  } finally {
+    h.restore();
+  }
+});
+
+test('ingest can be aimed at one document by id', async () => {
+  const h = ingestHarness({
+    stagedDocs: [stagedDoc('doc-1', '2026-10-19T10:00:00Z'), stagedDoc('doc-2', '2026-10-19T11:00:00Z')],
+  });
+
+  try {
+    const response = await h.post({ id: 'doc-2' });
+    assert.deepEqual(response.body, { processed: ['doc-2'], failed: [], remaining: 1 }, 'the named document is ingested, not the oldest');
+  } finally {
+    h.restore();
+  }
+});
+
+test('a malformed target is rejected instead of ingesting the wrong document', async () => {
+  const h = ingestHarness({ stagedDocs: [stagedDoc('doc-1', '2026-10-19T10:00:00Z')] });
+
+  try {
+    assert.equal((await h.post({ id: '' })).status, 400);
+    assert.equal((await h.post({ exclude: 'doc-1' })).status, 400);
+    assert.equal((await h.post({ exclude: [1] })).status, 400);
+    assert.equal(h.log.transactions, 0, 'a rejected request must not ingest anything');
+  } finally {
+    h.restore();
   }
 });
 
