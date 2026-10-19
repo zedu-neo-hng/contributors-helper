@@ -29,7 +29,9 @@ function loadModule(file, stubs = {}) {
 }
 
 const summarize = loadModule('src/lib/summarize.ts');
-const cleaner = loadModule('src/lib/cleanText.ts');
+// The cleaner is plain ESM sharing one rulebook with scripts/clean-transcripts.mjs; TypeScript
+// transpiles it for the vm just like the .ts modules.
+const cleaner = loadModule('src/lib/cleanText.mjs');
 
 const SECTIONED_SUMMARY = [
   '## Meeting Summary', 'The team reviewed the week.', '',
@@ -274,13 +276,15 @@ test('ingest cleans, summarises and stores the full document', async () => {
     assert.equal(payload.model, 'deepseek/deepseek-v4-flash-0731', 'the floor routing must stay gone');
     assert.ok(payload.messages[0].content.includes('Extract only'), 'summaries must be extract-only');
     assert.ok(payload.messages[0].content.includes('People & Roles'), 'the neo-008 section format must be requested');
-    assert.equal(payload.messages[1].content, 'we are going to review the week\n\nDeadlines move to Sunday.');
+    // `noisyTranscript` is a caption capture, so it takes the corpus shaping: reflowed, timestamps
+    // and markers gone, first letter capitalised.
+    assert.equal(payload.messages[1].content, '## Cleaned Transcript\n\nWe are going to review the week Deadlines move to Sunday.');
 
     assert.equal(h.log.upserts.length, 1);
     assert.equal(h.log.upserts[0].where.sourceId, 'doc-1');
     assert.equal(h.log.upserts[0].create.title, '2026-10-19_call_10');
     assert.ok(h.log.upserts[0].create.summary.includes('## Key Decisions'));
-    assert.ok(h.log.upserts[0].create.cleaned.includes('we are going to review the week'));
+    assert.ok(h.log.upserts[0].create.cleaned.includes('We are going to review the week'));
     assert.deepEqual(h.log.upserts[0].update, { title: '2026-10-19_call_10', summary: h.log.upserts[0].create.summary, cleaned: h.log.upserts[0].create.cleaned });
 
     assert.equal(h.log.updates.length, 1);
