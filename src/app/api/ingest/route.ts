@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { extractText, getDocumentProxy } from "unpdf";
 import { cleanTranscriptText } from "@/lib/cleanText";
+import { resetKnowledgeCache } from "@/lib/knowledge";
 import { prisma } from "@/lib/prisma";
 import {
   SUMMARIZE_MODEL,
@@ -118,6 +119,9 @@ export async function POST(req: Request) {
         failed.push({ id: doc.id, error: stageError(stage, e) });
       }
     }
+
+    // Newly ingested summaries must reach the chat without a process restart.
+    if (processed.length > 0) resetKnowledgeCache();
 
     const remaining = await prisma.stagedDocument.count({ where: { status: "STAGED" } });
     return NextResponse.json({ processed, failed, remaining });

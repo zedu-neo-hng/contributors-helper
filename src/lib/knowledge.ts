@@ -1,6 +1,8 @@
 import { readdir, readFile } from "fs/promises";
 import path from "path";
 
+import { prisma } from "@/lib/prisma";
+
 /**
  * Knowledge base loader for Zoe (issue #36).
  *
@@ -67,6 +69,11 @@ export type SessionIndex = {
   titleTokens: Set<string>;
   /** Tokens from the summary body plus the title. */
   tokens: Set<string>;
+  /**
+   * Cleaned text held in memory for database-ingested documents; file pairs read their transcript
+   * from disk on demand instead and leave this undefined.
+   */
+  cleaned?: string;
 };
 
 export type KnowledgeBase = {
@@ -185,6 +192,29 @@ export async function loadKnowledgeBase(): Promise<KnowledgeBase> {
     });
   }
 
+  // Ingested documents (operator uploads) join the committed corpus: their summary is always on
+  // and their cleaned text attaches like a transcript. A database outage must not take the chat
+  // down, since the committed corpus alone still answers cohort questions.
+  try {
+    const ingested = await prisma.ingestedDocument.findMany({ orderBy: { createdAt: "asc" } });
+    for (const row of ingested) {
+      const titleTokens = new Set(tokenize(row.title));
+      summaries.push(row.summary);
+      index.push({
+        base: row.title,
+        titleTokens,
+        tokens: new Set([...titleTokens, ...tokenize(row.summary)]),
+        cleaned: row.cleaned,
+      });
+    }
+  } catch (error) {
+    console.error(
+      `Ingested knowledge is unavailable; serving the committed corpus only: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
   cached = { summaries: summaries.join("\n\n---\n\n"), index };
   return cached;
 }
@@ -210,6 +240,7 @@ export async function readTranscript(base: string): Promise<string> {
 export async function buildKnowledgeContext(question: string): Promise<string> {
   const knowledgeBase = await loadKnowledgeBase();
   const selected = selectSessions(question, knowledgeBase.index);
+  const sessions = new Map(knowledgeBase.index.map((session) => [session.base, session]));
 
   const parts = [
     "=== COHORT CALL KNOWLEDGE (compacted summaries of the Zedu/HNG cohort calls) ===",
@@ -217,10 +248,9 @@ export async function buildKnowledgeContext(question: string): Promise<string> {
   ];
 
   for (const base of selected) {
-    parts.push(
-      `=== CALL TRANSCRIPT — EXACT WORDING (${base}) ===`,
-      await readTranscript(base),
-    );
+    const session = sessions.get(base);
+    const text = session?.cleaned ?? (await readTranscript(base));
+    parts.push(`=== CALL TRANSCRIPT — EXACT WORDING (${base}) ===`, text);
   }
 
   return parts.join("\n\n");

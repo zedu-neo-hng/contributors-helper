@@ -38,7 +38,7 @@ const SECTIONED_SUMMARY = [
 ].join('\n');
 
 function prismaStub({ stagedDocs = [] } = {}) {
-  const log = { creates: [], upserts: [], updates: [], transactions: 0 };
+  const log = { creates: [], upserts: [], updates: [], transactions: 0, knowledgeResets: 0 };
   const prisma = {
     stagedDocument: {
       create: async args => {
@@ -82,7 +82,7 @@ class OpenAIMock {
   }
 }
 
-function makeContext({ prisma, openai, secret }) {
+function makeContext({ prisma, openai, secret, log }) {
   return {
     exports: {},
     console: { error: (...args) => console.error('[route]', ...args), log() {}, warn() {} },
@@ -110,6 +110,14 @@ function makeContext({ prisma, openai, secret }) {
       }
       if (name === '@/lib/cleanText') return { __esModule: true, cleanTranscriptText: cleaner.cleanTranscriptText };
       if (name === '@/lib/summarize') return { __esModule: summarize, ...summarize };
+      if (name === '@/lib/knowledge') {
+        return {
+          __esModule: true,
+          resetKnowledgeCache: () => {
+            log.knowledgeResets += 1;
+          },
+        };
+      }
       return require(name);
     },
   };
@@ -184,7 +192,7 @@ test('upload validates and stages the file bytes in the database', async () => {
 function ingestHarness({ stagedDocs = [], reply = SECTIONED_SUMMARY } = {}) {
   const { prisma, log } = prismaStub({ stagedDocs });
   const openai = new OpenAIMock(reply);
-  const context = makeContext({ prisma, openai, secret: 's3cret' });
+  const context = makeContext({ prisma, openai, secret: 's3cret', log });
   const { POST } = runRoute('src/app/api/ingest/route.ts', context);
 
   const previousSecret = process.env.INGEST_SECRET;
@@ -234,6 +242,7 @@ test('ingest cleans, summarises and stores the full document', async () => {
     assert.equal(h.log.updates.length, 1);
     assert.deepEqual(h.log.updates[0], { where: { id: 'doc-1' }, data: { status: 'INGESTED' } });
     assert.equal(h.log.transactions, 1);
+    assert.equal(h.log.knowledgeResets, 1, 'the chat knowledge cache must refresh after new documents');
   } finally {
     h.restore();
   }
@@ -272,6 +281,7 @@ test('ingest failures keep the document staged for retry', async () => {
     const response = await empty.post();
     assert.deepEqual(response.body, { processed: [], failed: [{ id: 'doc-3', error: 'Empty AI response.' }], remaining: 1 });
     assert.deepEqual(empty.log.updates, [], 'a failed document must not be marked INGESTED');
+    assert.equal(empty.log.knowledgeResets, 0, 'nothing was ingested, so the knowledge cache must not be invalidated');
   } finally {
     empty.restore();
   }
