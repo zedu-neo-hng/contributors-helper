@@ -27,6 +27,9 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const requestInFlight = useRef(false);
+  const composing = useRef(false);
   const [streaming, setStreaming] = useState<boolean>(false);
   const [sessionId, setSessionId] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -63,6 +66,13 @@ export default function ChatPage() {
       if (request === copyRequest.current) setCopyFeedback({ index, state: 'error' });
     }
   };
+
+  useEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    composer.style.height = "auto";
+    composer.style.height = `${Math.min(composer.scrollHeight + 2, 160)}px`;
+  }, [input]);
 
   useEffect(() => {
     let id = "";
@@ -108,7 +118,8 @@ export default function ChatPage() {
     e.preventDefault();
 
     const question = input.trim();
-    if (!question || loading || streaming) return;
+    if (!question || requestInFlight.current) return;
+    requestInFlight.current = true;
 
     const userMessage: Message = {
       role: "user",
@@ -227,10 +238,7 @@ export default function ChatPage() {
         },
       ]);
     } finally {
-      if (typewriterRef.current) {
-        clearInterval(typewriterRef.current);
-        typewriterRef.current = undefined;
-      }
+      requestInFlight.current = false;
       setLoading(false);
       setStreaming(false);
     }
@@ -415,6 +423,7 @@ export default function ChatPage() {
         <div
           style={{
             flex: 1,
+            minHeight: 0,
             padding: "20px",
             overflowY: "auto",
             display: "flex",
@@ -453,6 +462,8 @@ export default function ChatPage() {
               <div className="markdown-content" ref={(element) => {
                 if (element) messageElements.current.set(idx, element);
                 else messageElements.current.delete(idx);
+              }} style={{
+                whiteSpace: m.role === "user" ? "pre-wrap" : undefined,
               }}>
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
@@ -560,32 +571,61 @@ export default function ChatPage() {
         {/* Input Form */}
         <form
           onSubmit={handleSubmit}
+          aria-busy={loading}
           style={{
             padding: "16px",
             borderTop: "1px solid #30363d",
             display: "flex",
+            flexShrink: 0,
+            alignItems: "flex-start",
             gap: "10px",
             background: "#161b22",
           }}
         >
-          <input
-            className={styles.composerInput}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about tasks, submission links, or slide decks..."
-            style={{
-              flex: 1,
-              backgroundColor: "#0d1117",
-              border: "1px solid #30363d",
-              color: "#fff",
-              padding: "10px 14px",
-              borderRadius: "6px",
-              outline: "none",
-            }}
-          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <textarea
+              className={styles.composerInput}
+              ref={composerRef}
+              aria-label="Message Zoe"
+              aria-describedby="composer-help"
+              rows={1}
+              value={input}
+              readOnly={loading}
+              onChange={(e) => setInput(e.target.value)}
+              onCompositionStart={() => { composing.current = true; }}
+              onCompositionEnd={() => { composing.current = false; }}
+              onKeyDown={(e) => {
+                if (
+                  e.key !== "Enter" || e.shiftKey || composing.current ||
+                  e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229
+                ) return;
+                e.preventDefault();
+                if (!e.repeat) e.currentTarget.form?.requestSubmit();
+              }}
+              placeholder="Ask about tasks, submission links, or slide decks..."
+              style={{
+                display: "block",
+                width: "100%",
+                minHeight: "46px",
+                maxHeight: "160px",
+                resize: "none",
+                overflowY: "auto",
+                font: "inherit",
+                lineHeight: 1.5,
+                backgroundColor: "#0d1117",
+                border: "1px solid #30363d",
+                color: "#fff",
+                padding: "10px 14px",
+                borderRadius: "6px",
+              }}
+            />
+            <small id="composer-help" style={{ display: "block", marginTop: "6px", color: "#8b949e" }}>
+              Enter to send · Shift+Enter for a new line
+            </small>
+          </div>
           <button
             type="submit"
+            disabled={loading || !input.trim()}
             style={{
               backgroundColor: "#7c3aed",
               color: "#fff",
@@ -593,7 +633,10 @@ export default function ChatPage() {
               padding: "10px 18px",
               borderRadius: "6px",
               fontWeight: "bold",
-              cursor: "pointer",
+              flexShrink: 0,
+              minHeight: "46px",
+              opacity: loading || !input.trim() ? 0.6 : 1,
+              cursor: loading || !input.trim() ? "not-allowed" : "pointer",
             }}
           >
             Send
