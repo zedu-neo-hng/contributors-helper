@@ -5,9 +5,24 @@ import { authOptions } from "@/lib/auth";
 import { buildKnowledgeContext, isKnowledgeBaseError } from "@/lib/knowledge";
 import { prisma } from "@/lib/prisma";
 
-async function getAuthenticatedUser() {
-  const session = await getServerSession(authOptions);
+function verifyServiceToken(req: Request): boolean {
+  const serviceToken = req.headers.get("x-zoe-service-token");
+  const expected = process.env.ZOE_SERVICE_TOKEN;
+  return Boolean(serviceToken && expected && serviceToken === expected);
+}
 
+async function getAuthenticatedUser(req: Request) {
+  // 1. Service-token auth (for server-to-server calls from FE proxy)
+  if (verifyServiceToken(req)) {
+    const userId = req.headers.get("x-user-id");
+    const orgId = req.headers.get("x-user-org");
+    if (userId) {
+      return { id: userId, orgId: orgId ?? null };
+    }
+  }
+
+  // 2. Fallback: NextAuth session (existing behavior for direct browser access)
+  const session = await getServerSession(authOptions);
   return session?.user ?? null;
 }
 
@@ -265,9 +280,9 @@ ${knowledgeContext}
 `;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const user = await getAuthenticatedUser();
+    const user = await getAuthenticatedUser(req);
 
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -289,7 +304,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const user = await getAuthenticatedUser();
+    const user = await getAuthenticatedUser(req);
 
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
