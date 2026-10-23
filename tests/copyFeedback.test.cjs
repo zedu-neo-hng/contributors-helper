@@ -35,6 +35,11 @@ function harness(clipboard) {
   const jsx = (type, props) => ({ type, props });
   const context = {
     exports: {}, navigator: { clipboard },
+    crypto: { randomUUID: () => 'synthetic-session-id' },
+    fetch: () => {
+      const pending = { then: () => pending, catch: () => pending };
+      return pending;
+    },
     setTimeout(fn) { const id = {}; timers.set(id, fn); return id; },
     clearTimeout(id) { timers.delete(id); },
     require(name) {

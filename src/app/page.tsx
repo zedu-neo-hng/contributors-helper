@@ -2,9 +2,10 @@
 'use client';
 import { useState, useEffect, useRef, FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { messagePlainText } from '../lib/messagePlainText';
 import styles from './chat.module.css';
-import DocumentUpload from '@/components/DocumentUpload';
+import IngestPanel from '@/components/IngestPanel';
 import { signIn, signOut, useSession } from "next-auth/react";
 
 
@@ -29,6 +30,7 @@ export default function ChatPage() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const requestInFlight = useRef(false);
   const composing = useRef(false);
+  const [streaming, setStreaming] = useState<boolean>(false);
   const [sessionId, setSessionId] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -41,10 +43,12 @@ export default function ChatPage() {
   const messageElements = useRef(new Map<number, HTMLDivElement>());
   const copyRequest = useRef(0);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+  const typewriterRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => () => {
     copyRequest.current++;
     clearTimeout(copyTimer.current);
+    if (typewriterRef.current) clearInterval(typewriterRef.current);
   }, []);
 
   const copyMessage = async (index: number) => {
@@ -142,23 +146,84 @@ export default function ChatPage() {
         }),
       });
 
-      const data = await res.json();
+      const contentType = res.headers.get("content-type") ?? "";
 
-      if (!res.ok) {
-        throw new Error(data.error || `Chat request failed (${res.status})`);
+      if (!res.ok || contentType.includes("application/json")) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `Chat request failed (${res.status})`);
       }
 
-      if (typeof data.reply !== "string") {
+      if (!res.body) {
         throw new Error("The chat API returned an invalid response.");
       }
 
-      setMessages([
-        ...updatedMessages,
-        {
-          role: "assistant",
-          content: data.reply,
-        },
-      ]);
+      // The reply arrives as SSE events ({ delta } chunks, { error } on failure).
+      // Received text is revealed gradually by a typewriter interval so it reads
+      // as typing; ReactMarkdown renders the revealed text on every tick.
+      setStreaming(true);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let full = "";
+      let revealed = 0;
+
+      const showTyped = (content: string) => {
+        setMessages((current) => {
+          const last = current[current.length - 1];
+
+          if (last?.role === "assistant") {
+            const next = [...current];
+            next[next.length - 1] = { role: "assistant", content };
+            return next;
+          }
+
+          return [...current, { role: "assistant", content }];
+        });
+        setLoading(false);
+      };
+
+      const typewriter = setInterval(() => {
+        if (revealed >= full.length) return;
+
+        revealed += Math.max(1, Math.ceil((full.length - revealed) / 20));
+        showTyped(full.slice(0, revealed));
+      }, 16);
+      typewriterRef.current = typewriter;
+
+      const applyEvent = (event: string) => {
+        const dataLine = event
+          .split("\n")
+          .find((line) => line.startsWith("data: "));
+
+        if (!dataLine) return;
+
+        const payload = JSON.parse(dataLine.slice("data: ".length)) as {
+          delta?: string;
+          error?: string;
+        };
+
+        if (payload.error) throw new Error(payload.error);
+
+        if (typeof payload.delta === "string") full += payload.delta;
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) applyEvent(part);
+      }
+
+      clearInterval(typewriter);
+      typewriterRef.current = undefined;
+      showTyped(full || "No response.");
     } catch (error) {
       const message =
         error instanceof Error
@@ -175,6 +240,7 @@ export default function ChatPage() {
     } finally {
       requestInFlight.current = false;
       setLoading(false);
+      setStreaming(false);
     }
   };
 
@@ -389,7 +455,7 @@ export default function ChatPage() {
                   opacity: 0.8,
                 }}
               >
-                {m.role === "user" ? "You" : "Zedu AI"}
+                {m.role === "user" ? "You" : "Zoe"}
               </strong>
 
               {/* Markdown rendering for structured text, lists, and clickable links */}
@@ -400,6 +466,7 @@ export default function ChatPage() {
                 whiteSpace: m.role === "user" ? "pre-wrap" : undefined,
               }}>
                 <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
                   components={{
                     a: ({ ...props }) => (
                       <a
@@ -431,6 +498,39 @@ export default function ChatPage() {
                     p: ({ ...props }) => (
                       <p {...props} style={{ margin: "6px 0" }} />
                     ),
+                    table: ({ ...props }) => (
+                      <table
+                        {...props}
+                        style={{
+                          borderCollapse: "collapse",
+                          margin: "10px 0",
+                          display: "block",
+                          maxWidth: "100%",
+                          overflowX: "auto",
+                        }}
+                      />
+                    ),
+                    th: ({ ...props }) => (
+                      <th
+                        {...props}
+                        style={{
+                          border: "1px solid #30363d",
+                          background: "#21262d",
+                          padding: "6px 10px",
+                          textAlign: "left",
+                        }}
+                      />
+                    ),
+                    td: ({ ...props }) => (
+                      <td
+                        {...props}
+                        style={{
+                          border: "1px solid #30363d",
+                          padding: "6px 10px",
+                          textAlign: "left",
+                        }}
+                      />
+                    ),
                   }}
                 >
                   {m.content}
@@ -440,6 +540,8 @@ export default function ChatPage() {
                 <button type="button" className={styles.copy}
                   aria-label={`Copy Zoe response ${idx + 1}`}
                   aria-describedby={`copy-status-${idx}`}
+                  disabled={streaming && idx === messages.length - 1}
+                  style={streaming && idx === messages.length - 1 ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
                   onClick={() => void copyMessage(idx)}>
                   {copyFeedback?.index === idx && copyFeedback.state === 'success' ? 'Copied' : 'Copy'}
                 </button>
@@ -460,7 +562,7 @@ export default function ChatPage() {
                 fontStyle: "italic",
               }}
             >
-              Zedu AI is reviewing tabs and formatting...
+              Zoe is thinking…
             </div>
           )}
           <div ref={messagesEndRef} />
@@ -541,7 +643,7 @@ export default function ChatPage() {
           </button>
         </form>
       </div>
-      <DocumentUpload />
+      <IngestPanel />
     </main>
   );
 }
