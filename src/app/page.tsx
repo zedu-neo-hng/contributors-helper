@@ -420,7 +420,7 @@ export default function ChatPage() {
 
         {/* Message Window */}
 
-        <div
+        <div role="log" aria-live="polite" 
           style={{
             flex: 1,
             minHeight: 0,
@@ -431,6 +431,7 @@ export default function ChatPage() {
             gap: "16px",
           }}
         >
+
           {messages.map((m, idx) => (
             <div
               key={idx}
@@ -555,7 +556,7 @@ export default function ChatPage() {
             </div>
           ))}
           {loading && (
-            <div
+            <div role="status"
               style={{
                 color: "#8b949e",
                 fontSize: "0.85rem",
