@@ -8,26 +8,27 @@ const ts = require('typescript');
 
 function harness(clipboard) {
   const slots = [];
+  const states = [];
   let cursor = 0;
+  let stateCursor = 0;
   let mounted = false;
   const cleanups = [];
   const timers = new Map();
   const react = {
     useState(initial) {
-      const index = cursor++;
-      if (!(index in slots)) slots[index] = initial;
-      return [slots[index], value => { slots[index] = value; }];
+      const index = stateCursor++;
+      if (!(index in states)) states[index] = initial;
+      return [states[index], value => { states[index] = value; }];
     },
     useRef(initial) {
       const index = cursor++;
       return slots[index] ||= { current: initial };
     },
     useEffect(effect) {
-      // Run effects like React would; capture only the first returned cleanup (the
-      // copy effect). Later cleanups, such as the chat-history fetch, are out of scope.
-      const cleanup = effect();
-      if (!mounted && typeof cleanup === 'function' && !cleanups.length) {
-        cleanups.push(cleanup);
+      // Run only the copy cleanup effect; session network loading is out of scope.
+      if (!mounted && !cleanups.length) {
+        const cleanup = effect();
+        if (typeof cleanup === 'function') cleanups.push(cleanup);
       }
     },
   };
@@ -56,6 +57,7 @@ function harness(clipboard) {
   let elements;
   function render() {
     cursor = 0;
+    stateCursor = 0;
     elements = [];
     function walk(value) {
       if (Array.isArray(value)) return value.forEach(walk);
@@ -72,8 +74,8 @@ function harness(clipboard) {
   }
   return {
     render, timers, unmount: () => cleanups.forEach(fn => fn()),
-    messages: value => { slots[1] = value; },
-    get feedback() { return slots[7]; },
+    messages: value => { states[1] = value; },
+    get feedback() { return states[5]; },
   };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
