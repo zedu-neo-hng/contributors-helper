@@ -28,3 +28,16 @@ Feedback records contain a response ID, rating, optional downvote comment, and t
 The existing Dockerfile and Coolify workflow are preserved. The app listens on port 3000. Set `AI_API_KEY`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `ADMIN_SESSION_SECRET` as server-side environment variables in Coolify. Configure the persistent volume described above. Deployment continues to run only after the existing Malware Scan (CI Gate) succeeds on `main`.
 
 Live: https://contributors.zedu.chat
+https://contributors.zedu.chat
+
+## Multiline composer checks
+
+Run `npm ci`, `npx playwright install chromium`, then `npm run test:e2e`.
+The current `dev` snapshot is missing `prisma/schema.prisma`, so its existing
+postinstall step fails. For composer-only checks, use `npm ci --ignore-scripts`
+until the database schema is restored; this does not validate database setup.
+The tests start the local app on port 3024 and mock Google session and chat
+responses, so no account, AI credentials, or paid requests are required.
+They cover multiline payloads, keyboard/IME handling, duplicate submissions,
+failure recovery, and desktop/narrow-screen layout. To use an installed Edge
+browser locally, set `PLAYWRIGHT_CHANNEL=msedge` instead of installing Chromium.
